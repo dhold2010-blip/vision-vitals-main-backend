@@ -1,0 +1,36 @@
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      APP_ENV: development
+      DATABASE_URL: postgresql+psycopg://vision:vision@db:5432/vision_vitals
+      JWT_SECRET: ${JWT_SECRET:-development-only-change-me-access}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:-development-only-change-me-refresh}
+      AI_PROVIDER: ${AI_PROVIDER:-mock}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      STORAGE_PATH: /app/storage
+      TRUSTED_HOSTS: localhost,127.0.0.1,api
+    volumes:
+      - vision-vitals-storage:/app/storage
+    depends_on:
+      db:
+        condition: service_healthy
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: vision_vitals
+      POSTGRES_USER: vision
+      POSTGRES_PASSWORD: vision
+    volumes:
+      - vision-vitals-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vision -d vision_vitals"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  vision-vitals-storage:
+  vision-vitals-db:
