@@ -47,6 +47,26 @@ def test_logout_all_invalidates_access(client):
     assert response.status_code == 401
 
 
+def test_sensitive_account_deletion_requires_reauthentication(client):
+    data = register(client, "delete@example.com")
+    headers = auth_headers(data)
+    denied = client.request(
+        "DELETE",
+        "/api/v1/users/me",
+        headers=headers,
+        json={"current_password": "wrong password"},
+    )
+    assert denied.status_code == 401
+    deleted = client.request(
+        "DELETE",
+        "/api/v1/users/me",
+        headers=headers,
+        json={"current_password": "correct horse battery staple"},
+    )
+    assert deleted.status_code == 200
+    assert client.get("/api/v1/users/me", headers=headers).status_code == 401
+
+
 def test_analysis_upload_and_idor_protection(client):
     owner = register(client, "owner@example.com")
     other = register(client, "other@example.com")
@@ -90,3 +110,15 @@ def test_upload_validation_and_metric_sources(client):
     )
     assert metric.status_code == 201
     assert client.get("/api/v1/metrics", headers=headers).json()["data"][0]["source"] == "USER_PROVIDED"
+    unavailable = client.post(
+        "/api/v1/metrics",
+        headers=headers,
+        json={
+            "metric_type": "blood_pressure",
+            "source": "AI_INFERRED",
+            "value": None,
+            "availability": "UNAVAILABLE",
+            "measured_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+    assert unavailable.status_code == 201
