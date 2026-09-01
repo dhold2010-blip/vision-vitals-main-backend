@@ -27,11 +27,10 @@ class Settings:
     log_level: str = os.getenv("LOG_LEVEL", "INFO")
 
     def validate(self) -> None:
-        if self.app_env.lower() in {"production", "prod"}:
-            if len(self.jwt_secret) < 32 or len(self.jwt_refresh_secret) < 32:
-                raise RuntimeError("JWT_SECRET and JWT_REFRESH_SECRET must be set in production")
-            if self.jwt_secret == self.jwt_refresh_secret:
-                raise RuntimeError("JWT signing secrets must be different")
+        if len(self.jwt_secret) < 32 or len(self.jwt_refresh_secret) < 32:
+            raise RuntimeError("JWT_SECRET and JWT_REFRESH_SECRET must be set and at least 32 characters")
+        if self.jwt_secret == self.jwt_refresh_secret:
+            raise RuntimeError("JWT signing secrets must be different")
         if self.max_upload_size_mb < 1 or self.max_upload_size_mb > 100:
             raise RuntimeError("MAX_UPLOAD_SIZE_MB must be between 1 and 100")
         if self.ai_provider not in {"mock", "gemini"}:
