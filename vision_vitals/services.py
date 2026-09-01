@@ -10,7 +10,7 @@ from .storage import StoredImage, StorageProvider
 
 
 class VisionAnalysisService:
-    def __init__(self, db: Session, storage: StorageProvider, provider: AIProvider):
+    def __init__(self, db: Session, storage: StorageProvider, provider: AIProvider | None = None):
         self.db = db
         self.storage = storage
         self.provider = provider
@@ -35,6 +35,8 @@ class VisionAnalysisService:
             ai_request = AIAnalysisRequest(
                 request_id=request_id, mime_type=mime_type, image_sha256=stored.sha256
             )
+            if self.provider is None:
+                raise AppError("AI_PROVIDER_ERROR", "No AI provider is configured", 503)
             result: AIAnalysisResponse = self.provider.analyze(ai_request, image)
             if result.request_id != request_id:
                 raise AIOutputInvalidError("The AI response request_id did not match the request")
