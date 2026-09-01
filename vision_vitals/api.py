@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, File, Request, UploadFile
 from fastapi.responses import FileResponse
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session, joinedload
 
@@ -26,6 +27,7 @@ from .schemas import (
     ProfileUpdate,
     RefreshRequest,
     RegisterRequest,
+    DeleteAccountRequest,
     SessionData,
     TokenData,
     UserData,
@@ -282,12 +284,29 @@ def change_password(
 
 
 @router.delete("/users/me", response_model=Envelope)
-def delete_account(auth: AuthContext = Depends(current_auth), db: Session = Depends(get_db), rid: str = Depends(request_id)):
+def delete_account(
+    body: DeleteAccountRequest,
+    auth: AuthContext = Depends(current_auth),
+    db: Session = Depends(get_db),
+    rid: str = Depends(request_id),
+):
+    if not verify_password(body.current_password, auth.user.password_hash):
+        raise AppError("AUTH_INVALID_CREDENTIALS", "Current password is incorrect", 401)
     analyses = db.scalars(select(Analysis).where(Analysis.user_id == auth.user.id)).all()
     storage = LocalStorageProvider()
     for analysis in analyses:
         if analysis.image:
             storage.delete(analysis.image.storage_key)
+    db.add(
+        AuditEvent(
+            user_id=auth.user.id,
+            action="ACCOUNT_DELETED",
+            resource_type="user",
+            resource_id=auth.user.id,
+            request_id=rid,
+            metadata_json={},
+        )
+    )
     db.delete(auth.user)
     db.commit()
     return envelope({"deleted": True}, rid)
@@ -303,7 +322,9 @@ async def create_analysis(
 ):
     content = await image.read(settings.max_upload_size_mb * 1024 * 1024 + 1)
     service = VisionAnalysisService(db, LocalStorageProvider(), get_ai_provider())
-    analysis = service.create(auth.user.id, rid, content, image.filename or "image", image.content_type or "")
+    analysis = await run_in_threadpool(
+        service.create, auth.user.id, rid, content, image.filename or "image", image.content_type or ""
+    )
     return envelope(_analysis_data(analysis), rid)
 
 
@@ -365,7 +386,7 @@ def delete_analysis(
         raise AppError("RESOURCE_NOT_FOUND", "Analysis not found", 404)
     if analysis.user_id != auth.user.id:
         raise AppError("RESOURCE_FORBIDDEN", "You cannot delete this analysis", 403)
-    VisionAnalysisService(db, LocalStorageProvider(), get_ai_provider()).delete(analysis, auth.user.id, rid)
+    VisionAnalysisService(db, LocalStorageProvider()).delete(analysis, auth.user.id, rid)
     return envelope({"deleted": True}, rid)
 
 
