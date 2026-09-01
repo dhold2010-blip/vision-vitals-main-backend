@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 
 class Envelope(BaseModel):
@@ -82,6 +82,10 @@ class PasswordChange(BaseModel):
     new_password: str = Field(min_length=12, max_length=128)
 
 
+class DeleteAccountRequest(BaseModel):
+    current_password: str = Field(min_length=1, max_length=128)
+
+
 class SessionData(BaseModel):
     id: str
     created_at: datetime
@@ -127,12 +131,11 @@ class HealthMetricCreate(BaseModel):
     availability: Literal["AVAILABLE", "UNAVAILABLE", "UNCERTAIN"] = "AVAILABLE"
     measured_at: datetime
 
-    @field_validator("value")
-    @classmethod
-    def value_required_when_available(cls, value: float | None, info):
-        if info.data.get("availability") == "AVAILABLE" and value is None:
+    @model_validator(mode="after")
+    def value_required_when_available(self):
+        if self.availability == "AVAILABLE" and self.value is None:
             raise ValueError("value is required when availability is AVAILABLE")
-        return value
+        return self
 
 
 class HealthMetricData(HealthMetricCreate):
