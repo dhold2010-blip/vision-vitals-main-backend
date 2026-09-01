@@ -8,6 +8,8 @@ os.environ["DATABASE_URL"] = "sqlite:///./test_vision_vitals.db"
 os.environ["STORAGE_PATH"] = "./test_storage"
 os.environ["AI_PROVIDER"] = "mock"
 os.environ["TRUSTED_HOSTS"] = "testserver,localhost"
+os.environ["JWT_SECRET"] = "test-access-secret-that-is-at-least-32-characters"
+os.environ["JWT_REFRESH_SECRET"] = "test-refresh-secret-that-is-at-least-32-characters"
 
 import pytest
 from fastapi.testclient import TestClient
