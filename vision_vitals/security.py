@@ -32,8 +32,7 @@ def token_hash(token: str) -> str:
 def _secret(token_type: str) -> str:
     secret = settings.jwt_secret if token_type == "access" else settings.jwt_refresh_secret
     if not secret:
-        # Development gets a process-local secret; production validation rejects this.
-        secret = "development-only-vision-vitals-" + token_type
+        raise AppError("INTERNAL_ERROR", "JWT signing is not configured", 500)
     return secret
 
 
