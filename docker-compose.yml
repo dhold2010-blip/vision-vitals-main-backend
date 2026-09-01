@@ -17,6 +17,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
+    command: ["sh", "-c", "alembic upgrade head && uvicorn vision_vitals.main:app --host 0.0.0.0 --port 8000"]
   db:
     image: postgres:16-alpine
     environment:
