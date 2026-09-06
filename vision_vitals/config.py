@@ -21,6 +21,16 @@ class Settings:
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
     gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
     max_upload_size_mb: int = int(os.getenv("MAX_UPLOAD_SIZE_MB", "10"))
+    device_auth_enabled: bool = os.getenv("DEVICE_AUTH_ENABLED", "true").lower() in {"1", "true", "yes"}
+    device_session_expire_minutes: int = int(os.getenv("DEVICE_SESSION_EXPIRE_MINUTES", "60"))
+    device_heartbeat_timeout_seconds: int = int(os.getenv("DEVICE_HEARTBEAT_TIMEOUT_SECONDS", "300"))
+    device_capture_rate_limit: int = int(os.getenv("DEVICE_CAPTURE_RATE_LIMIT", "12"))
+    device_sensor_rate_limit: int = int(os.getenv("DEVICE_SENSOR_RATE_LIMIT", "60"))
+    device_auth_rate_limit: int = int(os.getenv("DEVICE_AUTH_RATE_LIMIT", "10"))
+    device_registration_rate_limit: int = int(os.getenv("DEVICE_REGISTRATION_RATE_LIMIT", "5"))
+    device_heartbeat_rate_limit: int = int(os.getenv("DEVICE_HEARTBEAT_RATE_LIMIT", "30"))
+    device_min_image_width: int = int(os.getenv("DEVICE_MIN_IMAGE_WIDTH", "8"))
+    device_min_image_height: int = int(os.getenv("DEVICE_MIN_IMAGE_HEIGHT", "8"))
     storage_path: Path = Path(os.getenv("STORAGE_PATH", "./storage"))
     cors_origins: tuple[str, ...] = _csv("CORS_ORIGINS")
     trusted_hosts: tuple[str, ...] = _csv("TRUSTED_HOSTS", "localhost,127.0.0.1")
@@ -33,6 +43,21 @@ class Settings:
             raise RuntimeError("JWT signing secrets must be different")
         if self.max_upload_size_mb < 1 or self.max_upload_size_mb > 100:
             raise RuntimeError("MAX_UPLOAD_SIZE_MB must be between 1 and 100")
+        if self.device_session_expire_minutes < 1:
+            raise RuntimeError("DEVICE_SESSION_EXPIRE_MINUTES must be positive")
+        if self.device_heartbeat_timeout_seconds < 1:
+            raise RuntimeError("DEVICE_HEARTBEAT_TIMEOUT_SECONDS must be positive")
+        for name in (
+            "device_capture_rate_limit",
+            "device_sensor_rate_limit",
+            "device_auth_rate_limit",
+            "device_registration_rate_limit",
+            "device_heartbeat_rate_limit",
+        ):
+            if getattr(self, name) < 1:
+                raise RuntimeError(f"{name.upper()} must be positive")
+        if self.device_min_image_width < 1 or self.device_min_image_height < 1:
+            raise RuntimeError("Device image minimum dimensions must be positive")
         if self.ai_provider not in {"mock", "gemini"}:
             raise RuntimeError("AI_PROVIDER must be mock or gemini")
 

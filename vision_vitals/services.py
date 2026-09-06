@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from .ai import AIProvider
 from .errors import AIOutputInvalidError, AppError
 from .models import Analysis, AnalysisImage, AnalysisResult, AuditEvent
+from .quality import ImageQualityService
 from .schemas import AIAnalysisRequest, AIAnalysisResponse
 from .storage import StoredImage, StorageProvider
 
@@ -14,10 +15,18 @@ class VisionAnalysisService:
         self.db = db
         self.storage = storage
         self.provider = provider
+        self.quality = ImageQualityService()
 
     def create(
-        self, user_id: str, request_id: str, image: bytes, filename: str, mime_type: str
+        self,
+        user_id: str,
+        request_id: str,
+        image: bytes,
+        filename: str,
+        mime_type: str,
+        image_source: str = "UPLOAD",
     ) -> Analysis:
+        self.quality.validate_or_raise(image)
         analysis = Analysis(user_id=user_id, request_id=request_id, status="PROCESSING")
         self.db.add(analysis)
         self.db.flush()
@@ -31,6 +40,7 @@ class VisionAnalysisService:
                 mime_type=stored.mime_type,
                 size_bytes=stored.size_bytes,
                 sha256=stored.sha256,
+                source=image_source,
             )
             ai_request = AIAnalysisRequest(
                 request_id=request_id, mime_type=mime_type, image_sha256=stored.sha256

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
+import math
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -143,3 +144,98 @@ class HealthMetricData(HealthMetricCreate):
     id: str
     analysis_id: str | None
     created_at: datetime
+
+
+class DeviceRegisterRequest(BaseModel):
+    device_identifier: str = Field(min_length=1, max_length=128)
+    device_name: str = Field(min_length=1, max_length=120)
+    device_type: str = Field(default="VISION_VITALS_CAMERA", min_length=1, max_length=64)
+    firmware_version: str | None = Field(default=None, max_length=64)
+    software_version: str | None = Field(default=None, max_length=64)
+
+
+class DeviceData(BaseModel):
+    id: str
+    device_identifier: str
+    device_name: str
+    device_type: str
+    status: str
+    firmware_version: str | None
+    software_version: str | None
+    last_seen_at: datetime | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class DeviceRegisterData(DeviceData):
+    device_secret: str
+
+
+class DeviceAuthenticateRequest(BaseModel):
+    device_secret: str = Field(min_length=20, max_length=256)
+
+
+class DeviceSessionData(BaseModel):
+    device_id: str
+    session_identifier: str
+    device_session_token: str
+    created_at: datetime
+    expires_at: datetime
+
+
+class DeviceHeartbeatRequest(BaseModel):
+    software_version: str | None = Field(default=None, max_length=64)
+    firmware_version: str | None = Field(default=None, max_length=64)
+
+
+class DeviceCaptureData(BaseModel):
+    id: str
+    device_id: str
+    user_id: str
+    analysis_id: str | None
+    capture_type: str
+    status: str
+    idempotency_key: str
+    created_at: datetime
+    completed_at: datetime | None
+
+
+class SensorReadingCreate(BaseModel):
+    sensor_type: Literal["distance"]
+    value: float
+    unit: Literal["mm"]
+    quality: str | None = Field(default=None, max_length=32)
+    timestamp: datetime
+    capture_id: str | None = None
+
+    @field_validator("value")
+    @classmethod
+    def validate_distance(cls, value: float) -> float:
+        if not math.isfinite(value) or value < 0 or value > 2000:
+            raise ValueError("distance must be a finite value between 0 and 2000 mm")
+        return value
+
+    @field_validator("timestamp")
+    @classmethod
+    def validate_timestamp(cls, value: datetime) -> datetime:
+        if value.tzinfo is None:
+            raise ValueError("timestamp must include a timezone")
+        now = datetime.now(timezone.utc)
+        normalized = value.astimezone(timezone.utc)
+        if normalized > now + timedelta(minutes=5):
+            raise ValueError("timestamp cannot be more than five minutes in the future")
+        return normalized
+
+
+class SensorReadingData(BaseModel):
+    id: str
+    device_id: str
+    capture_id: str | None
+    sensor_type: str
+    value: float
+    unit: str
+    quality: str | None
+    timestamp: datetime
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)

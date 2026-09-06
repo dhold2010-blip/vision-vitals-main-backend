@@ -29,6 +29,18 @@ def token_hash(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
+def generate_device_secret() -> str:
+    return secrets.token_urlsafe(48)
+
+
+def verify_device_secret(secret: str, secret_hash: str) -> bool:
+    return secrets.compare_digest(token_hash(secret), secret_hash)
+
+
+def generate_device_session_token() -> str:
+    return secrets.token_urlsafe(48)
+
+
 def _secret(token_type: str) -> str:
     secret = settings.jwt_secret if token_type == "access" else settings.jwt_refresh_secret
     if not secret:

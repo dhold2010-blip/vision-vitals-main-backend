@@ -48,6 +48,9 @@ class LocalStorageProvider(StorageProvider):
             raise AppError("UPLOAD_TOO_LARGE", "The image exceeds the upload size limit", 413)
         if not content:
             raise AppError("UPLOAD_INVALID", "The uploaded image is empty", 422)
+        supplied_extension = Path(filename or "").suffix.lower()
+        if supplied_extension and supplied_extension != self.allowed_mime[mime_type]:
+            raise AppError("UPLOAD_INVALID", "The filename extension does not match the MIME type", 422)
         try:
             with Image.open(io.BytesIO(content)) as image:
                 detected = image.format

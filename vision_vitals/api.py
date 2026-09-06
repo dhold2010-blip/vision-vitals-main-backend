@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, File, Request, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, Request, UploadFile
 from fastapi.responses import FileResponse
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy import select, update
@@ -11,9 +11,27 @@ from sqlalchemy.orm import Session, joinedload
 from .ai import get_ai_provider
 from .config import settings
 from .db import get_db
-from .dependencies import AuthContext, admin_auth, current_auth, request_id
+from .dependencies import (
+    AuthContext,
+    DeviceAuthContext,
+    admin_auth,
+    current_auth,
+    current_device_auth,
+    request_id,
+)
 from .errors import AppError
-from .models import Analysis, AuditEvent, HealthMetric, SessionRecord, User, UserProfile
+from .models import (
+    Analysis,
+    AuditEvent,
+    Device,
+    DeviceCapture,
+    DeviceSession,
+    HealthMetric,
+    SensorReading,
+    SessionRecord,
+    User,
+    UserProfile,
+)
 from .schemas import (
     AnalysisData,
     AIAnalysisResponse,
@@ -28,11 +46,30 @@ from .schemas import (
     RefreshRequest,
     RegisterRequest,
     DeleteAccountRequest,
+    DeviceAuthenticateRequest,
+    DeviceCaptureData,
+    DeviceData,
+    DeviceHeartbeatRequest,
+    DeviceRegisterData,
+    DeviceRegisterRequest,
+    DeviceSessionData,
     SessionData,
+    SensorReadingCreate,
+    SensorReadingData,
     TokenData,
     UserData,
 )
-from .security import create_token, hash_password, token_hash, verify_password
+from .security import (
+    create_token,
+    generate_device_secret,
+    generate_device_session_token,
+    hash_password,
+    token_hash,
+    verify_password,
+    verify_device_secret,
+)
+from .quality import ImageQualityService
+from .rate_limit import device_rate_limiter
 from .services import VisionAnalysisService
 from .storage import LocalStorageProvider
 
@@ -312,18 +349,465 @@ def delete_account(
     return envelope({"deleted": True}, rid)
 
 
-@router.post("/analyses", response_model=Envelope, status_code=201)
-async def create_analysis(
-    request: Request,
-    image: UploadFile = File(...),
+def _device_status(device: Device) -> str:
+    if device.status == "REVOKED":
+        return "REVOKED"
+    if not device.last_seen_at:
+        return "REGISTERED"
+    last_seen = (
+        device.last_seen_at
+        if device.last_seen_at.tzinfo
+        else device.last_seen_at.replace(tzinfo=timezone.utc)
+    )
+    if (datetime.now(timezone.utc) - last_seen).total_seconds() <= settings.device_heartbeat_timeout_seconds:
+        return "ONLINE"
+    return "OFFLINE"
+
+
+def _device_data(device: Device) -> DeviceData:
+    return DeviceData(
+        id=device.id,
+        device_identifier=device.device_identifier,
+        device_name=device.device_name,
+        device_type=device.device_type,
+        status=_device_status(device),
+        firmware_version=device.firmware_version,
+        software_version=device.software_version,
+        last_seen_at=device.last_seen_at,
+        created_at=device.created_at,
+        updated_at=device.updated_at,
+    )
+
+
+def _capture_data(capture: DeviceCapture) -> DeviceCaptureData:
+    return DeviceCaptureData(
+        id=capture.id,
+        device_id=capture.device_id,
+        user_id=capture.user_id,
+        analysis_id=capture.analysis_id,
+        capture_type=capture.capture_type,
+        status=capture.status,
+        idempotency_key=capture.idempotency_key,
+        created_at=capture.created_at,
+        completed_at=capture.completed_at,
+    )
+
+
+@router.post("/devices/register", response_model=Envelope, status_code=201)
+def register_device(
+    body: DeviceRegisterRequest,
     auth: AuthContext = Depends(current_auth),
     db: Session = Depends(get_db),
     rid: str = Depends(request_id),
 ):
+    device_rate_limiter.check(
+        f"register:{auth.user.id}", settings.device_registration_rate_limit
+    )
+    existing = db.scalar(
+        select(Device).where(
+            Device.owner_user_id == auth.user.id,
+            Device.device_identifier == body.device_identifier,
+        )
+    )
+    if existing:
+        raise AppError("DEVICE_EXISTS", "A device with this identifier is already registered", 409)
+    secret = generate_device_secret()
+    device = Device(
+        owner_user_id=auth.user.id,
+        device_identifier=body.device_identifier,
+        device_name=body.device_name,
+        device_type=body.device_type,
+        firmware_version=body.firmware_version,
+        software_version=body.software_version,
+        credential_hash=token_hash(secret),
+    )
+    db.add(device)
+    db.flush()
+    db.add(
+        AuditEvent(
+            user_id=auth.user.id,
+            action="DEVICE_REGISTERED",
+            resource_type="device",
+            resource_id=device.id,
+            request_id=rid,
+            metadata_json={"device_type": device.device_type},
+        )
+    )
+    db.commit()
+    db.refresh(device)
+    data = DeviceRegisterData(**_device_data(device).model_dump(), device_secret=secret)
+    return envelope(data, rid)
+
+
+@router.get("/devices", response_model=Envelope)
+def list_devices(
+    auth: AuthContext = Depends(current_auth),
+    db: Session = Depends(get_db),
+    rid: str = Depends(request_id),
+):
+    devices = db.scalars(
+        select(Device).where(Device.owner_user_id == auth.user.id).order_by(Device.created_at.desc())
+    ).all()
+    return envelope([_device_data(device) for device in devices], rid)
+
+
+def _owned_device(device_id: str, auth: AuthContext, db: Session) -> Device:
+    device = db.scalar(
+        select(Device).where(Device.id == device_id, Device.owner_user_id == auth.user.id)
+    )
+    if not device:
+        raise AppError("RESOURCE_NOT_FOUND", "Device not found", 404)
+    return device
+
+
+@router.get("/devices/{device_id}", response_model=Envelope)
+def get_device(
+    device_id: str,
+    auth: AuthContext = Depends(current_auth),
+    db: Session = Depends(get_db),
+    rid: str = Depends(request_id),
+):
+    return envelope(_device_data(_owned_device(device_id, auth, db)), rid)
+
+
+@router.delete("/devices/{device_id}", response_model=Envelope)
+def revoke_device(
+    device_id: str,
+    auth: AuthContext = Depends(current_auth),
+    db: Session = Depends(get_db),
+    rid: str = Depends(request_id),
+):
+    device = _owned_device(device_id, auth, db)
+    device.status = "REVOKED"
+    now = datetime.now(timezone.utc)
+    db.execute(
+        update(DeviceSession)
+        .where(DeviceSession.device_id == device.id, DeviceSession.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    db.add(
+        AuditEvent(
+            user_id=auth.user.id,
+            action="DEVICE_REVOKED",
+            resource_type="device",
+            resource_id=device.id,
+            request_id=rid,
+            metadata_json={},
+        )
+    )
+    db.commit()
+    return envelope({"revoked": True}, rid)
+
+
+@router.post("/devices/{device_id}/rotate-credential", response_model=Envelope)
+def rotate_device_credential(
+    device_id: str,
+    auth: AuthContext = Depends(current_auth),
+    db: Session = Depends(get_db),
+    rid: str = Depends(request_id),
+):
+    device_rate_limiter.check(
+        f"rotate:{auth.user.id}", settings.device_registration_rate_limit
+    )
+    device = _owned_device(device_id, auth, db)
+    if device.status == "REVOKED":
+        raise AppError("DEVICE_REVOKED", "The device has been revoked", 409)
+    secret = generate_device_secret()
+    device.credential_hash = token_hash(secret)
+    now = datetime.now(timezone.utc)
+    db.execute(
+        update(DeviceSession)
+        .where(DeviceSession.device_id == device.id, DeviceSession.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    db.add(
+        AuditEvent(
+            user_id=auth.user.id,
+            action="DEVICE_CREDENTIAL_ROTATED",
+            resource_type="device",
+            resource_id=device.id,
+            request_id=rid,
+            metadata_json={},
+        )
+    )
+    db.commit()
+    return envelope({"device_id": device.id, "device_secret": secret}, rid)
+
+
+@router.post("/devices/{device_id}/authenticate", response_model=Envelope)
+def authenticate_device(
+    device_id: str,
+    body: DeviceAuthenticateRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    rid: str = Depends(request_id),
+):
+    device_rate_limiter.check(
+        f"auth:{request.client.host if request.client else 'unknown'}:{device_id}",
+        settings.device_auth_rate_limit,
+    )
+    device = db.scalar(select(Device).where(Device.id == device_id))
+    if not device or device.status == "REVOKED" or not verify_device_secret(
+        body.device_secret, device.credential_hash if device else ""
+    ):
+        db.add(
+            AuditEvent(
+                user_id=device.owner_user_id if device else None,
+                action="DEVICE_AUTHENTICATION_FAILED",
+                resource_type="device",
+                resource_id=device_id,
+                request_id=rid,
+                metadata_json={},
+            )
+        )
+        db.commit()
+        raise AppError("DEVICE_INVALID_CREDENTIALS", "Device credentials are invalid", 401)
+    session_token = generate_device_session_token()
+    now = datetime.now(timezone.utc)
+    session = DeviceSession(
+        device_id=device.id,
+        token_hash=token_hash(session_token),
+        expires_at=now + timedelta(minutes=settings.device_session_expire_minutes),
+        last_seen_at=now,
+    )
+    device.last_seen_at = now
+    db.add(session)
+    db.add(
+        AuditEvent(
+            user_id=device.owner_user_id,
+            action="DEVICE_AUTHENTICATED",
+            resource_type="device_session",
+            resource_id=session.id,
+            request_id=rid,
+            metadata_json={"device_id": device.id},
+        )
+    )
+    db.commit()
+    db.refresh(session)
+    return envelope(
+        DeviceSessionData(
+            device_id=device.id,
+            session_identifier=session.id,
+            device_session_token=session_token,
+            created_at=session.created_at,
+            expires_at=session.expires_at,
+        ),
+        rid,
+    )
+
+
+@router.post("/devices/{device_id}/heartbeat", response_model=Envelope)
+def device_heartbeat(
+    device_id: str,
+    body: DeviceHeartbeatRequest,
+    device_auth: DeviceAuthContext = Depends(current_device_auth),
+    db: Session = Depends(get_db),
+    rid: str = Depends(request_id),
+):
+    device_rate_limiter.check(f"heartbeat:{device_id}", settings.device_heartbeat_rate_limit)
+    now = datetime.now(timezone.utc)
+    device_auth.device.last_seen_at = now
+    device_auth.session.last_seen_at = now
+    if body.software_version is not None:
+        device_auth.device.software_version = body.software_version
+    if body.firmware_version is not None:
+        device_auth.device.firmware_version = body.firmware_version
+    db.commit()
+    return envelope(_device_data(device_auth.device), rid)
+
+
+@router.get("/devices/{device_id}/status", response_model=Envelope)
+def device_status(
+    device_id: str,
+    device_auth: DeviceAuthContext = Depends(current_device_auth),
+    rid: str = Depends(request_id),
+):
+    return envelope(_device_data(device_auth.device), rid)
+
+
+@router.post("/devices/{device_id}/logout", response_model=Envelope)
+def device_logout(
+    device_id: str,
+    device_auth: DeviceAuthContext = Depends(current_device_auth),
+    db: Session = Depends(get_db),
+    rid: str = Depends(request_id),
+):
+    device_auth.session.revoked_at = datetime.now(timezone.utc)
+    db.add(
+        AuditEvent(
+            user_id=device_auth.user.id,
+            action="DEVICE_SESSION_REVOKED",
+            resource_type="device_session",
+            resource_id=device_auth.session.id,
+            request_id=rid,
+            metadata_json={"device_id": device_id},
+        )
+    )
+    db.commit()
+    return envelope({"logged_out": True}, rid)
+
+
+@router.post("/devices/{device_id}/capture", response_model=Envelope)
+async def device_capture(
+    device_id: str,
+    request: Request,
+    image: UploadFile = File(...),
+    capture_type: str = Form(default="camera", max_length=32),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    device_auth: DeviceAuthContext = Depends(current_device_auth),
+    db: Session = Depends(get_db),
+    rid: str = Depends(request_id),
+):
+    device_rate_limiter.check(f"capture:{device_id}", settings.device_capture_rate_limit)
+    if not idempotency_key or len(idempotency_key) > 128:
+        raise AppError("IDEMPOTENCY_REQUIRED", "Idempotency-Key is required", 422)
+    existing = db.scalar(
+        select(DeviceCapture).where(
+            DeviceCapture.device_id == device_id,
+            DeviceCapture.idempotency_key == idempotency_key,
+        )
+    )
+    if existing:
+        analysis = db.scalar(
+            select(Analysis).options(joinedload(Analysis.result)).where(Analysis.id == existing.analysis_id)
+        ) if existing.analysis_id else None
+        return envelope(
+            {
+                "capture": _capture_data(existing),
+                "analysis": _analysis_data(analysis) if analysis else None,
+                "duplicate": True,
+            },
+            rid,
+        )
+
+    capture = DeviceCapture(
+        device_id=device_id,
+        user_id=device_auth.user.id,
+        capture_type=capture_type,
+        status="RECEIVED",
+        idempotency_key=idempotency_key,
+    )
+    db.add(capture)
+    db.flush()
+    content = await image.read(settings.max_upload_size_mb * 1024 * 1024 + 1)
+    capture.status = "VALIDATING"
+    try:
+        ImageQualityService().validate_or_raise(content, enforce_exposure=True)
+        validation_storage = LocalStorageProvider(
+            max_bytes=settings.max_upload_size_mb * 1024 * 1024
+        )
+        stored_check = validation_storage.save_image(
+            content, image.filename or "capture", image.content_type or ""
+        )
+        validation_storage.delete(stored_check.storage_key)
+    except AppError as exc:
+        capture.status = "INVALID"
+        db.add(
+            AuditEvent(
+                user_id=device_auth.user.id,
+                action="DEVICE_CAPTURE_REJECTED",
+                resource_type="device_capture",
+                resource_id=capture.id,
+                request_id=rid,
+                metadata_json={"code": exc.code},
+            )
+        )
+        db.commit()
+        raise
+    capture.status = "VALID"
+    db.commit()
+    try:
+        capture.status = "PROCESSING"
+        db.commit()
+        analysis = await run_in_threadpool(
+            VisionAnalysisService(db, LocalStorageProvider(), get_ai_provider()).create,
+            device_auth.user.id,
+            rid,
+            content,
+            image.filename or "capture",
+            image.content_type or "",
+            "HARDWARE_CAMERA",
+        )
+        capture = db.get(DeviceCapture, capture.id)
+        capture.analysis_id = analysis.id
+        capture.status = "COMPLETED"
+        capture.completed_at = datetime.now(timezone.utc)
+        db.add(
+            AuditEvent(
+                user_id=device_auth.user.id,
+                action="DEVICE_CAPTURE_SUBMITTED",
+                resource_type="device_capture",
+                resource_id=capture.id,
+                request_id=rid,
+                metadata_json={"analysis_id": analysis.id, "device_id": device_id},
+            )
+        )
+        db.commit()
+    except Exception:
+        capture = db.get(DeviceCapture, capture.id)
+        if capture:
+            capture.status = "FAILED"
+            db.commit()
+        raise
+    return envelope(
+        {"capture": _capture_data(capture), "analysis": _analysis_data(analysis), "duplicate": False},
+        rid,
+    )
+
+
+@router.post("/devices/{device_id}/sensor-readings", response_model=Envelope, status_code=201)
+def create_sensor_reading(
+    device_id: str,
+    body: SensorReadingCreate,
+    device_auth: DeviceAuthContext = Depends(current_device_auth),
+    db: Session = Depends(get_db),
+    rid: str = Depends(request_id),
+):
+    device_rate_limiter.check(f"sensor:{device_id}", settings.device_sensor_rate_limit)
+    if body.capture_id:
+        capture = db.scalar(
+            select(DeviceCapture).where(
+                DeviceCapture.id == body.capture_id, DeviceCapture.device_id == device_id
+            )
+        )
+        if not capture:
+            raise AppError("SENSOR_INVALID", "The capture does not belong to this device", 422)
+    reading = SensorReading(
+        device_id=device_id,
+        capture_id=body.capture_id,
+        sensor_type=body.sensor_type,
+        value=body.value,
+        unit=body.unit,
+        quality=body.quality,
+        timestamp=body.timestamp,
+    )
+    db.add(reading)
+    db.commit()
+    db.refresh(reading)
+    return envelope(SensorReadingData.model_validate(reading), rid)
+
+
+@router.post("/analyses", response_model=Envelope, status_code=201)
+async def create_analysis(
+    request: Request,
+    image: UploadFile = File(...),
+    source: str = Form(default="UPLOAD"),
+    auth: AuthContext = Depends(current_auth),
+    db: Session = Depends(get_db),
+    rid: str = Depends(request_id),
+):
+    if source not in {"APP_CAMERA", "UPLOAD"}:
+        raise AppError("VALIDATION_ERROR", "Unsupported image source", 422)
     content = await image.read(settings.max_upload_size_mb * 1024 * 1024 + 1)
     service = VisionAnalysisService(db, LocalStorageProvider(), get_ai_provider())
     analysis = await run_in_threadpool(
-        service.create, auth.user.id, rid, content, image.filename or "image", image.content_type or ""
+        service.create,
+        auth.user.id,
+        rid,
+        content,
+        image.filename or "image",
+        image.content_type or "",
+        source,
     )
     return envelope(_analysis_data(analysis), rid)
 
