@@ -4,6 +4,7 @@ import base64
 import json
 
 import httpx
+from pydantic import ValidationError
 
 from .config import settings
 from .errors import AIOutputInvalidError, AppError
@@ -55,7 +56,6 @@ class GeminiProvider(AIProvider):
         )
         url = (
             f"https://generativelanguage.googleapis.com/v1beta/models/{self.model}:generateContent"
-            f"?key={self.api_key}"
         )
         body = {
             "contents": [
@@ -74,12 +74,19 @@ class GeminiProvider(AIProvider):
             "generationConfig": {"responseMimeType": "application/json", "temperature": 0},
         }
         try:
-            response = httpx.post(url, json=body, timeout=30)
+            response = httpx.post(
+                url,
+                json=body,
+                headers={"x-goog-api-key": self.api_key},
+                timeout=30,
+            )
             response.raise_for_status()
             payload = response.json()
             text = payload["candidates"][0]["content"]["parts"][0]["text"]
             parsed = json.loads(text)
             result = AIAnalysisResponse.model_validate(parsed)
+        except ValidationError as exc:
+            raise AIOutputInvalidError("The AI provider returned a response outside the supported schema") from exc
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError) as exc:
             raise AppError("AI_PROVIDER_ERROR", "The AI provider could not process the image", 502) from exc
         if result.request_id != request.request_id:

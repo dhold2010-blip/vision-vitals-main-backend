@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -13,9 +14,8 @@ from fastapi.responses import JSONResponse
 
 from .api import router
 from .config import settings
-from .db import Base, engine
 from .errors import AppError
-from .models import (  # noqa: F401 - register all models before create_all
+from .models import (  # noqa: F401 - register all models for Alembic metadata
     Analysis,
     AnalysisImage,
     AnalysisResult,
@@ -38,7 +38,6 @@ logging.basicConfig(level=getattr(logging, settings.log_level.upper(), logging.I
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     settings.validate()
-    Base.metadata.create_all(bind=engine)
     settings.storage_path.mkdir(parents=True, exist_ok=True)
     yield
 
@@ -57,19 +56,27 @@ if settings.cors_origins:
         allow_origins=list(settings.cors_origins),
         allow_credentials=True,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
-        allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
+        allow_headers=[
+            "Authorization",
+            "Content-Type",
+            "X-Request-ID",
+            "X-Device-Session",
+            "Idempotency-Key",
+        ],
     )
 
 
 @app.middleware("http")
 async def request_context(request: Request, call_next):
     rid = request.headers.get("X-Request-ID", str(uuid.uuid4()))
-    request.state.request_id = rid[:64]
+    request.state.request_id = (
+        rid[:64] if re.fullmatch(r"[A-Za-z0-9._:-]{1,64}", rid) else str(uuid.uuid4())
+    )
     started = time.perf_counter()
     try:
         response = await call_next(request)
     except Exception:
-        logger.exception(
+        logger.error(
             '{"event":"request_error","request_id":"%s","method":"%s","path":"%s"}',
             request.state.request_id,
             request.method,
@@ -114,7 +121,12 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
 
 @app.exception_handler(Exception)
 async def internal_error_handler(request: Request, exc: Exception):
-    logger.exception("Unhandled internal error")
+    logger.error(
+        '{"event":"internal_error","request_id":"%s","method":"%s","path":"%s"}',
+        getattr(request.state, "request_id", ""),
+        request.method,
+        request.url.path,
+    )
     return JSONResponse(
         status_code=500,
         content={

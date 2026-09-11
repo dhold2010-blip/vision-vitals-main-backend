@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from fastapi import Depends, Request
+from fastapi import Depends, Request, Security
+from fastapi.security import APIKeyHeader, HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -12,6 +13,13 @@ from .db import get_db
 from .errors import AppError
 from .models import Device, DeviceSession, SessionRecord, User
 from .security import decode_token, token_hash
+
+bearer_scheme = HTTPBearer(auto_error=False, description="Short-lived user access token")
+device_session_scheme = APIKeyHeader(
+    name="X-Device-Session",
+    auto_error=False,
+    description="Short-lived session token issued to a registered device",
+)
 
 
 @dataclass(frozen=True)
@@ -33,9 +41,13 @@ def request_id(request: Request) -> str:
 
 
 def current_auth(
-    request: Request, db: Session = Depends(get_db)
+    request: Request,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
 ) -> AuthContext:
     authorization = request.headers.get("Authorization", "")
+    if credentials is not None:
+        authorization = f"{credentials.scheme} {credentials.credentials}"
     if not authorization.lower().startswith("bearer "):
         raise AppError("AUTH_UNAUTHORIZED", "Authentication is required", 401)
     payload = decode_token(authorization[7:].strip(), "access")
@@ -61,10 +73,11 @@ def current_device_auth(
     request: Request,
     device_id: str,
     db: Session = Depends(get_db),
+    session_header: str | None = Security(device_session_scheme),
 ) -> DeviceAuthContext:
     if not settings.device_auth_enabled:
         raise AppError("DEVICE_AUTH_DISABLED", "Device authentication is disabled", 503)
-    raw_token = request.headers.get("X-Device-Session", "")
+    raw_token = session_header or request.headers.get("X-Device-Session", "")
     if not raw_token:
         raise AppError("DEVICE_UNAUTHORIZED", "A device session is required", 401)
     device = db.scalar(select(Device).where(Device.id == device_id))

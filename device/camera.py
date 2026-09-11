@@ -3,6 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 
 from PIL import Image, UnidentifiedImageError
 
@@ -48,8 +49,14 @@ class RaspberryPiCameraProvider(CameraProvider):
         except ImportError as exc:
             raise RuntimeError("picamera2 is required on the Raspberry Pi") from exc
         self._camera = Picamera2()
+        try:
+            autofocus_mode = {"manual": 0, "auto": 1, "continuous": 2}[self.config.autofocus_mode]
+        except KeyError as exc:
+            raise ValueError("autofocus_mode must be manual, auto, or continuous") from exc
+        controls = {"AfMode": autofocus_mode}
         configuration = self._camera.create_still_configuration(
-            main={"size": (self.config.width, self.config.height)}
+            main={"size": (self.config.width, self.config.height)},
+            controls=controls,
         )
         self._camera.configure(configuration)
         self._camera.start()
@@ -61,7 +68,10 @@ class RaspberryPiCameraProvider(CameraProvider):
         suffix = ".png" if self.config.image_format == "png" else ".jpg"
         target = output_path.with_suffix(suffix)
         options = {"quality": self.config.quality} if suffix == ".jpg" else {}
+        started = monotonic()
         self._camera.capture_file(str(target), **options)
+        if monotonic() - started > self.config.capture_timeout_seconds:
+            raise TimeoutError("Camera capture exceeded the configured timeout")
         self.validate(target)
         return target
 

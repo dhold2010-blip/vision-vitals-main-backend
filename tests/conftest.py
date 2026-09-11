@@ -16,10 +16,14 @@ from fastapi.testclient import TestClient
 
 from vision_vitals.db import Base, engine
 from vision_vitals.main import app
+from vision_vitals.rate_limit import auth_rate_limiter, device_rate_limiter, password_rate_limiter
 
 
 @pytest.fixture(autouse=True)
 def reset_db():
+    auth_rate_limiter.reset()
+    device_rate_limiter.reset()
+    password_rate_limiter.reset()
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
     storage = Path("./test_storage")

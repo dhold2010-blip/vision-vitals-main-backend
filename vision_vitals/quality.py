@@ -24,6 +24,14 @@ class ImageQualityService:
         try:
             with Image.open(io.BytesIO(content)) as image:
                 width, height = image.size
+                if (
+                    width > settings.max_image_width
+                    or height > settings.max_image_height
+                    or width * height > settings.max_image_pixels
+                ):
+                    return ImageQualityResult(
+                        False, ("RESOLUTION_TOO_LARGE",), width=width, height=height
+                    )
                 image.load()
                 if width < settings.device_min_image_width or height < settings.device_min_image_height:
                     return ImageQualityResult(

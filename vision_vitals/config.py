@@ -29,8 +29,15 @@ class Settings:
     device_auth_rate_limit: int = int(os.getenv("DEVICE_AUTH_RATE_LIMIT", "10"))
     device_registration_rate_limit: int = int(os.getenv("DEVICE_REGISTRATION_RATE_LIMIT", "5"))
     device_heartbeat_rate_limit: int = int(os.getenv("DEVICE_HEARTBEAT_RATE_LIMIT", "30"))
+    auth_login_rate_limit: int = int(os.getenv("AUTH_LOGIN_RATE_LIMIT", "10"))
+    auth_registration_rate_limit: int = int(os.getenv("AUTH_REGISTRATION_RATE_LIMIT", "5"))
+    auth_refresh_rate_limit: int = int(os.getenv("AUTH_REFRESH_RATE_LIMIT", "20"))
+    password_rate_limit: int = int(os.getenv("PASSWORD_RATE_LIMIT", "5"))
     device_min_image_width: int = int(os.getenv("DEVICE_MIN_IMAGE_WIDTH", "8"))
     device_min_image_height: int = int(os.getenv("DEVICE_MIN_IMAGE_HEIGHT", "8"))
+    max_image_width: int = int(os.getenv("MAX_IMAGE_WIDTH", "8192"))
+    max_image_height: int = int(os.getenv("MAX_IMAGE_HEIGHT", "8192"))
+    max_image_pixels: int = int(os.getenv("MAX_IMAGE_PIXELS", "40000000"))
     storage_path: Path = Path(os.getenv("STORAGE_PATH", "./storage"))
     cors_origins: tuple[str, ...] = _csv("CORS_ORIGINS")
     trusted_hosts: tuple[str, ...] = _csv("TRUSTED_HOSTS", "localhost,127.0.0.1")
@@ -53,11 +60,21 @@ class Settings:
             "device_auth_rate_limit",
             "device_registration_rate_limit",
             "device_heartbeat_rate_limit",
+            "auth_login_rate_limit",
+            "auth_registration_rate_limit",
+            "auth_refresh_rate_limit",
+            "password_rate_limit",
         ):
             if getattr(self, name) < 1:
                 raise RuntimeError(f"{name.upper()} must be positive")
         if self.device_min_image_width < 1 or self.device_min_image_height < 1:
             raise RuntimeError("Device image minimum dimensions must be positive")
+        if (
+            self.max_image_width < self.device_min_image_width
+            or self.max_image_height < self.device_min_image_height
+            or self.max_image_pixels < 1
+        ):
+            raise RuntimeError("Maximum image dimensions and pixel count must be positive and usable")
         if self.ai_provider not in {"mock", "gemini"}:
             raise RuntimeError("AI_PROVIDER must be mock or gemini")
 

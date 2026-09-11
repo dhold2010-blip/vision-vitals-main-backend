@@ -31,5 +31,12 @@ class RateLimiter:
                 )
             events.append(now)
 
+    def reset(self) -> None:
+        """Clear in-process state between isolated test applications."""
+        with self._lock:
+            self._events.clear()
+
 
 device_rate_limiter = RateLimiter()
+auth_rate_limiter = RateLimiter()
+password_rate_limiter = RateLimiter()

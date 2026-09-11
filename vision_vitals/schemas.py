@@ -102,6 +102,7 @@ class AIAnalysisRequest(BaseModel):
 
 
 class AIAnalysisResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     provider: str = Field(min_length=1, max_length=64)
     model: str = Field(min_length=1, max_length=128)
     observation: str = Field(min_length=1, max_length=4000)

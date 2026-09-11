@@ -49,6 +49,8 @@ class DeviceConfig:
             raise ValueError("VISION_VITALS_DEVICE_IDENTIFIER is required")
         if self.image_format not in {"jpeg", "jpg", "png"}:
             raise ValueError("VISION_VITALS_IMAGE_FORMAT must be jpeg or png")
+        if self.autofocus_mode not in {"manual", "auto", "continuous"}:
+            raise ValueError("VISION_VITALS_AUTOFOCUS_MODE must be manual, auto, or continuous")
         if not 1 <= self.image_quality <= 100:
             raise ValueError("VISION_VITALS_IMAGE_QUALITY must be between 1 and 100")
         if self.resolution_width < 8 or self.resolution_height < 8:

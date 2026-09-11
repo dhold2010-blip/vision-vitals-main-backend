@@ -6,6 +6,7 @@ import re
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 from PIL import Image, UnidentifiedImageError
 
@@ -34,7 +35,7 @@ class StorageProvider:
 
 
 class LocalStorageProvider(StorageProvider):
-    allowed_mime = {"image/jpeg": ".jpg", "image/png": ".png"}
+    allowed_mime: ClassVar[dict[str, str]] = {"image/jpeg": ".jpg", "image/png": ".png"}
 
     def __init__(self, root: Path | None = None, max_bytes: int | None = None):
         self.root = (root or settings.storage_path).resolve()
@@ -54,6 +55,16 @@ class LocalStorageProvider(StorageProvider):
         try:
             with Image.open(io.BytesIO(content)) as image:
                 detected = image.format
+                if (
+                    image.width > settings.max_image_width
+                    or image.height > settings.max_image_height
+                    or image.width * image.height > settings.max_image_pixels
+                ):
+                    raise AppError(
+                        "UPLOAD_INVALID",
+                        "The image resolution exceeds the configured limit",
+                        422,
+                    )
                 image.verify()
         except (UnidentifiedImageError, OSError) as exc:
             raise AppError("UPLOAD_INVALID", "The image is corrupted or unsupported", 422) from exc

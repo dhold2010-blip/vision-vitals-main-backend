@@ -57,6 +57,12 @@ def test_device_registration_ownership_and_revocation(client):
     assert client.get(
         f"/api/v1/devices/{device['id']}/status", headers=device_headers
     ).status_code == 401
+    revoked_capture = client.post(
+        f"/api/v1/devices/{device['id']}/capture",
+        headers={**device_headers, "Idempotency-Key": "revoked-capture"},
+        files={"image": ("capture.png", image_bytes(), "image/png")},
+    )
+    assert revoked_capture.status_code == 401
 
 
 def test_capture_uses_unified_pipeline_and_is_idempotent(client):

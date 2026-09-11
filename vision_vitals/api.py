@@ -69,7 +69,7 @@ from .security import (
     verify_device_secret,
 )
 from .quality import ImageQualityService
-from .rate_limit import device_rate_limiter
+from .rate_limit import auth_rate_limiter, device_rate_limiter, password_rate_limiter
 from .services import VisionAnalysisService
 from .storage import LocalStorageProvider
 
@@ -127,6 +127,10 @@ def health_ready(db: Session = Depends(get_db), rid: str = Depends(request_id)):
 
 @router.post("/auth/register", response_model=Envelope, status_code=201)
 def register(body: RegisterRequest, request: Request, db: Session = Depends(get_db), rid: str = Depends(request_id)):
+    auth_rate_limiter.check(
+        f"register:{request.client.host if request.client else 'unknown'}",
+        settings.auth_registration_rate_limit,
+    )
     if db.scalar(select(User).where(User.email == body.email)):
         raise AppError("VALIDATION_ERROR", "An account with this email already exists", 409)
     user = User(email=body.email, password_hash=hash_password(body.password), role="USER")
@@ -150,6 +154,10 @@ def register(body: RegisterRequest, request: Request, db: Session = Depends(get_
 
 @router.post("/auth/login", response_model=Envelope)
 def login(body: LoginRequest, request: Request, db: Session = Depends(get_db), rid: str = Depends(request_id)):
+    auth_rate_limiter.check(
+        f"login:{request.client.host if request.client else 'unknown'}:{body.email}",
+        settings.auth_login_rate_limit,
+    )
     user = db.scalar(select(User).where(User.email == body.email))
     if not user or not verify_password(body.password, user.password_hash) or not user.is_active:
         raise AppError("AUTH_INVALID_CREDENTIALS", "Email or password is incorrect", 401)
@@ -170,6 +178,10 @@ def login(body: LoginRequest, request: Request, db: Session = Depends(get_db), r
 
 @router.post("/auth/refresh", response_model=Envelope)
 def refresh(body: RefreshRequest, request: Request, db: Session = Depends(get_db), rid: str = Depends(request_id)):
+    auth_rate_limiter.check(
+        f"refresh:{request.client.host if request.client else 'unknown'}",
+        settings.auth_refresh_rate_limit,
+    )
     from .security import decode_token
 
     payload = decode_token(body.refresh_token, "refresh")
@@ -301,6 +313,10 @@ def change_password(
     db: Session = Depends(get_db),
     rid: str = Depends(request_id),
 ):
+    password_rate_limiter.check(
+        f"password:{auth.user.id}",
+        settings.password_rate_limit,
+    )
     if not verify_password(body.current_password, auth.user.password_hash):
         raise AppError("AUTH_INVALID_CREDENTIALS", "Current password is incorrect", 401)
     auth.user.password_hash = hash_password(body.new_password)
@@ -327,6 +343,10 @@ def delete_account(
     db: Session = Depends(get_db),
     rid: str = Depends(request_id),
 ):
+    password_rate_limiter.check(
+        f"delete-account:{auth.user.id}",
+        settings.password_rate_limit,
+    )
     if not verify_password(body.current_password, auth.user.password_hash):
         raise AppError("AUTH_INVALID_CREDENTIALS", "Current password is incorrect", 401)
     analyses = db.scalars(select(Analysis).where(Analysis.user_id == auth.user.id)).all()
@@ -659,7 +679,11 @@ async def device_capture(
     rid: str = Depends(request_id),
 ):
     device_rate_limiter.check(f"capture:{device_id}", settings.device_capture_rate_limit)
-    if not idempotency_key or len(idempotency_key) > 128:
+    if (
+        not idempotency_key
+        or len(idempotency_key) > 128
+        or idempotency_key.strip() != idempotency_key
+    ):
         raise AppError("IDEMPOTENCY_REQUIRED", "Idempotency-Key is required", 422)
     existing = db.scalar(
         select(DeviceCapture).where(

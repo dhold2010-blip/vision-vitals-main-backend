@@ -108,6 +108,7 @@ class DeviceClient:
         return self._device_request(
             "POST",
             f"/api/v1/devices/{self._require_device_id()}/sensor-readings",
+            retryable=False,
             json=payload,
         )["data"]
 
@@ -116,17 +117,18 @@ class DeviceClient:
         if not token:
             raise RuntimeError("Authenticate the device before making device requests")
         headers = dict(kwargs.pop("headers", {}))
+        retryable = kwargs.pop("retryable", True)
         headers["X-Device-Session"] = token
         transient = {408, 425, 429, 500, 502, 503, 504}
         for attempt in range(self.retry_policy.max_retries + 1):
             try:
                 response = self.client.request(method, path, headers=headers, **kwargs)
             except httpx.TransportError:
-                if attempt >= self.retry_policy.max_retries:
+                if not retryable or attempt >= self.retry_policy.max_retries:
                     raise
                 time.sleep(self.retry_policy.base_delay_seconds * (2**attempt))
                 continue
-            if response.status_code in transient and attempt < self.retry_policy.max_retries:
+            if retryable and response.status_code in transient and attempt < self.retry_policy.max_retries:
                 time.sleep(self.retry_policy.base_delay_seconds * (2**attempt))
                 continue
             return self._expect(response)

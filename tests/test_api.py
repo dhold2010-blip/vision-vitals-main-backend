@@ -17,7 +17,16 @@ def test_health_and_openapi(client):
 
 
 def test_registration_login_and_invalid_credentials(client):
-    data = register(client, "person@example.com")
+    response = client.post(
+        "/api/v1/auth/register",
+        json={
+            "email": "person@example.com",
+            "password": "correct horse battery staple",
+            "role": "ADMIN",
+        },
+    )
+    assert response.status_code == 201
+    data = response.json()["data"]
     assert data["user"]["role"] == "USER"
     response = client.post(
         "/api/v1/auth/login",
@@ -83,6 +92,9 @@ def test_analysis_upload_and_idor_protection(client):
     assert response.json()["data"]["result"]["result_status"] == "UNAVAILABLE"
     forbidden = client.get(f"/api/v1/analyses/{analysis_id}", headers=auth_headers(other))
     assert forbidden.status_code == 403
+    assert client.get(
+        f"/api/v1/analyses/{analysis_id}/image", headers=auth_headers(other)
+    ).status_code == 403
     assert client.get(f"/api/v1/analyses/{analysis_id}", headers=auth_headers(owner)).status_code == 200
 
 
