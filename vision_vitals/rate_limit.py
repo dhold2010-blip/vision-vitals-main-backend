@@ -25,7 +25,7 @@ class RateLimiter:
             if len(events) >= limit:
                 raise AppError(
                     "RATE_LIMITED",
-                    "Too many device requests; try again later",
+                    "Too many requests; try again later",
                     429,
                     {"retry_after_seconds": self.window_seconds},
                 )
