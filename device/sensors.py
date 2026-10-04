@@ -32,7 +32,7 @@ class VL53L0XSensorProvider(SensorProvider):
             import adafruit_vl53l0x
         except ImportError as exc:
             raise RuntimeError(
-                "board, busio, and adafruit_vl53l0x are required on the Raspberry Pi"
+                "board, busio, and adafruit_vl53l0x are required for this CircuitPython sensor adapter"
             ) from exc
         i2c = busio.I2C(board.SCL, board.SDA)
         self._sensor = adafruit_vl53l0x.VL53L0X(i2c)

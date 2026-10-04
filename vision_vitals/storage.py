@@ -66,7 +66,7 @@ class LocalStorageProvider(StorageProvider):
                         422,
                     )
                 image.verify()
-        except (UnidentifiedImageError, OSError) as exc:
+        except (Image.DecompressionBombError, UnidentifiedImageError, OSError) as exc:
             raise AppError("UPLOAD_INVALID", "The image is corrupted or unsupported", 422) from exc
         if (mime_type == "image/jpeg" and detected != "JPEG") or (
             mime_type == "image/png" and detected != "PNG"

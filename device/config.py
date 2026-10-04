@@ -15,8 +15,6 @@ class DeviceConfig:
     resolution_width: int = 1280
     resolution_height: int = 720
     image_format: str = "jpeg"
-    image_quality: int = 90
-    autofocus_mode: str = "continuous"
     capture_timeout_seconds: float = 10.0
     max_image_bytes: int = 10 * 1024 * 1024
     max_retries: int = 3
@@ -33,8 +31,6 @@ class DeviceConfig:
             resolution_width=int(os.getenv("VISION_VITALS_CAMERA_WIDTH", "1280")),
             resolution_height=int(os.getenv("VISION_VITALS_CAMERA_HEIGHT", "720")),
             image_format=os.getenv("VISION_VITALS_IMAGE_FORMAT", "jpeg").lower(),
-            image_quality=int(os.getenv("VISION_VITALS_IMAGE_QUALITY", "90")),
-            autofocus_mode=os.getenv("VISION_VITALS_AUTOFOCUS_MODE", "continuous").lower(),
             capture_timeout_seconds=float(os.getenv("VISION_VITALS_CAPTURE_TIMEOUT", "10")),
             max_image_bytes=int(os.getenv("VISION_VITALS_MAX_IMAGE_BYTES", str(10 * 1024 * 1024))),
             max_retries=int(os.getenv("VISION_VITALS_MAX_RETRIES", "3")),
@@ -47,13 +43,11 @@ class DeviceConfig:
                 raise ValueError("VISION_VITALS_BACKEND_URL must use HTTPS")
         if not self.device_identifier:
             raise ValueError("VISION_VITALS_DEVICE_IDENTIFIER is required")
-        if self.image_format not in {"jpeg", "jpg", "png"}:
-            raise ValueError("VISION_VITALS_IMAGE_FORMAT must be jpeg or png")
-        if self.autofocus_mode not in {"manual", "auto", "continuous"}:
-            raise ValueError("VISION_VITALS_AUTOFOCUS_MODE must be manual, auto, or continuous")
-        if not 1 <= self.image_quality <= 100:
-            raise ValueError("VISION_VITALS_IMAGE_QUALITY must be between 1 and 100")
+        if self.image_format not in {"jpeg", "jpg"}:
+            raise ValueError("Hardware camera captures must use JPEG")
         if self.resolution_width < 8 or self.resolution_height < 8:
             raise ValueError("Camera resolution is too small")
+        if self.max_image_bytes < 1:
+            raise ValueError("VISION_VITALS_MAX_IMAGE_BYTES must be positive")
         if self.max_retries < 0 or self.max_retries > 5:
             raise ValueError("VISION_VITALS_MAX_RETRIES must be between 0 and 5")

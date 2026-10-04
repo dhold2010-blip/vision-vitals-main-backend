@@ -14,3 +14,4 @@ storage/*
 dist/
 build/
 *.egg-info/
+firmware/esp32_controller/secrets.h

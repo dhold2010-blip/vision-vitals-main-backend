@@ -5,16 +5,24 @@
 - Keep `GEMINI_API_KEY` server-side only. It is never returned by the API or
   written to application logs.
 - Put the API behind TLS and a trusted reverse proxy in deployment.
-- Device clients must use HTTPS in production; the Raspberry Pi never receives
-  Gemini, database, JWT-signing, or administrative credentials.
+- Device clients must use HTTPS in production; ESP32 boards never receive
+  Gemini, database, JWT-signing, or administrative credentials. The
+  device-specific credential is provisioned separately and is not a server
+  secret.
 - Device secrets and session tokens are stored only as SHA-256 hashes on the
   backend. Device sessions expire, can be revoked immediately, and captures
   require both an active device session and an idempotency key.
+- The Arduino `secrets.h` is an untracked prototype provisioning file, not
+  production secret storage. Production firmware should use protected NVS with
+  platform flash encryption and secure boot enabled.
 - Device ownership is always derived from the authenticated user that
   registered the device. Path IDs and request bodies cannot change ownership.
 - Image uploads are decoded and validated server-side, stored under generated
   private keys, bounded by byte, dimension, and pixel limits, and never logged
   or exposed as public URLs.
+- Hardware capture accepts only JPEG with a matching decoded image format.
+  Metadata is allow-listed and validated; image dimensions and device ownership
+  are derived by the backend rather than trusted from the ESP32.
 - Login, registration, refresh, password, device authentication, registration,
   heartbeat, capture, and sensor endpoints have bounded in-process rate
   limits. A shared limiter is required for multi-instance deployments.

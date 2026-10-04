@@ -235,6 +235,7 @@ class DeviceCapture(Base):
     capture_type: Mapped[str] = mapped_column(String(32), nullable=False)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="RECEIVED")
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)
+    capture_metadata: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict, nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     device: Mapped[Device] = relationship(back_populates="captures")

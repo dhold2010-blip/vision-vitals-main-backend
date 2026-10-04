@@ -35,6 +35,7 @@ class Settings:
     password_rate_limit: int = int(os.getenv("PASSWORD_RATE_LIMIT", "5"))
     device_min_image_width: int = int(os.getenv("DEVICE_MIN_IMAGE_WIDTH", "8"))
     device_min_image_height: int = int(os.getenv("DEVICE_MIN_IMAGE_HEIGHT", "8"))
+    device_min_sharpness: float = float(os.getenv("DEVICE_MIN_SHARPNESS", "0"))
     max_image_width: int = int(os.getenv("MAX_IMAGE_WIDTH", "8192"))
     max_image_height: int = int(os.getenv("MAX_IMAGE_HEIGHT", "8192"))
     max_image_pixels: int = int(os.getenv("MAX_IMAGE_PIXELS", "40000000"))
@@ -69,6 +70,8 @@ class Settings:
                 raise RuntimeError(f"{name.upper()} must be positive")
         if self.device_min_image_width < 1 or self.device_min_image_height < 1:
             raise RuntimeError("Device image minimum dimensions must be positive")
+        if self.device_min_sharpness < 0:
+            raise RuntimeError("DEVICE_MIN_SHARPNESS must be zero or positive")
         if (
             self.max_image_width < self.device_min_image_width
             or self.max_image_height < self.device_min_image_height

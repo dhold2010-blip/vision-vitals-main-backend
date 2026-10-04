@@ -14,6 +14,8 @@ Important settings include:
 * `MAX_UPLOAD_SIZE_MB`, `MAX_IMAGE_WIDTH`, `MAX_IMAGE_HEIGHT`, and
   `MAX_IMAGE_PIXELS`: upload safety limits.
 * `DEVICE_HEARTBEAT_TIMEOUT_SECONDS`: online/offline threshold.
+* `DEVICE_MIN_SHARPNESS`: optional calibrated blur threshold for hardware
+  captures; zero disables the sharpness heuristic.
 * authentication, password, and device rate limits.
 
 Do not put secrets in the image, repository, OpenAPI examples, device
@@ -59,7 +61,16 @@ before relying on rate limits across replicas.
 
 ## Hardware
 
-Raspberry Pi clients connect only to the HTTPS API. They never receive Gemini,
-database, JWT-signing, or administrator credentials. Use a device-specific
-secret, rotate it when a device is transferred, and revoke the device when it
-is lost.
+ESP32 firmware connects only to the HTTPS API with certificate verification
+enabled. It never receives Gemini, database, JWT-signing, or administrator
+credentials. Provision the one-time device secret into protected device
+storage, rotate it when a device is transferred, and revoke the device when it
+is lost. Hardware captures are JPEG-only and follow the device API contract in
+`API.md`; the optional VL53L0X range is positioning metadata, not a medical
+measurement.
+
+See `firmware/esp32_controller/README.md` for the ESP32 DevKit, ESP32-CAM
+(OV2640), capture button, LED, and optional sensor setup. Before deployment,
+set a trusted backend root CA in the untracked firmware secrets header. The
+firmware intentionally has no plain-HTTP production fallback and never disables
+TLS verification.

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 import uuid
 from dataclasses import dataclass
@@ -60,8 +61,8 @@ class DeviceClient:
         if not self.device_id:
             raise RuntimeError("Register the device before authenticating")
         response = self.client.post(
-            f"/api/v1/devices/{self.device_id}/authenticate",
-            json={"device_secret": device_secret},
+            "/api/v1/devices/authenticate",
+            json={"device_id": self.device_id, "device_secret": device_secret},
         )
         payload = self._expect(response)
         data = payload["data"]
@@ -78,18 +79,31 @@ class DeviceClient:
             },
         )["data"]
 
-    def capture(self, image_path: Path, idempotency_key: str | None = None) -> dict[str, Any]:
+    def capture(
+        self,
+        image_path: Path,
+        idempotency_key: str | None = None,
+        *,
+        capture_metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         self._validate_local_image(image_path)
         key = idempotency_key or str(uuid.uuid4())
         content = image_path.read_bytes()
         if len(content) > self.config.max_image_bytes:
             raise ValueError("Image exceeds the configured device limit")
-        mime_type = "image/png" if image_path.suffix.lower() == ".png" else "image/jpeg"
+        mime_type = "image/jpeg"
+        metadata = {
+            "image_source": "HARDWARE_CAMERA",
+            "camera_type": "ESP32_CAM",
+            "firmware_version": self.config.firmware_version,
+            "software_version": self.config.software_version,
+            **(capture_metadata or {}),
+        }
         return self._device_request(
             "POST",
             f"/api/v1/devices/{self._require_device_id()}/capture",
             files={"image": (image_path.name, content, mime_type)},
-            data={"capture_type": "camera"},
+            data={"capture_type": "camera", "capture_metadata": json.dumps(metadata)},
             headers={"Idempotency-Key": key},
         )["data"]
 
@@ -153,6 +167,8 @@ class DeviceClient:
             raise ValueError("Image does not exist or is empty")
         try:
             with Image.open(image_path) as image:
+                if image.format != "JPEG":
+                    raise ValueError("Hardware camera captures must be JPEG")
                 image.verify()
         except (UnidentifiedImageError, OSError) as exc:
             raise ValueError("Image is corrupted or unsupported") from exc

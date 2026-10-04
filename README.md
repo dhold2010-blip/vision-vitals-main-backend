@@ -34,80 +34,68 @@ environment configuration; no real secret is committed here.
 ## Device and camera integration
 
 Users register a device through `POST /api/v1/devices/register`. The response
-contains a device secret exactly once; store it on the Raspberry Pi through its
-local device configuration, never in source control. The Pi authenticates with
-that secret, receives a short-lived device session token, and sends captures
-with `X-Device-Session` and an `Idempotency-Key` header.
+contains a device secret exactly once. Provision it into the ESP32 controller's
+protected local storage; never put it in source control or the ESP32-CAM image.
+The controller authenticates with that secret, receives a short-lived device
+session token, and sends captures with `X-Device-Session` and an
+`Idempotency-Key` header.
 
 Supported device endpoints:
 
 - `POST /api/v1/devices/register`
 - `GET /api/v1/devices` and `GET /api/v1/devices/{device_id}`
 - `DELETE /api/v1/devices/{device_id}` (revokes the device and sessions)
+- `POST /api/v1/devices/authenticate`
 - `POST /api/v1/devices/{device_id}/authenticate`
 - `POST /api/v1/devices/{device_id}/heartbeat`
 - `GET /api/v1/devices/{device_id}/status`
 - `POST /api/v1/devices/{device_id}/capture`
 - `POST /api/v1/devices/{device_id}/sensor-readings`
 
-The `device/` directory is a separate Raspberry Pi client. It uses Picamera2
-for Camera Module 3, performs local image checks, requires HTTPS outside local
-test hosts, retries only transient failures with bounded exponential backoff,
-and does not contain backend or Gemini credentials. The backend repeats all
-upload validation and sends hardware images through the same
-`VisionAnalysisService` used by app uploads.
+The hardware path is an input/control device, not an AI computer:
+
+```text
+ESP32-CAM (OV2640) → ESP32 DevKit / ESP32-WROOM-32
+  → Wi-Fi + verified HTTPS → device API → image quality checks
+  → VisionAnalysisService → selected AIProvider
+```
+
+The ESP32-CAM supplies JPEG frames; the main controller handles Wi-Fi,
+heartbeat, the physical capture button, optional VL53L0X positioning readings,
+and controlled illumination/status LEDs. `firmware/esp32_controller/` contains
+the controller reference firmware and UART camera-frame contract. The
+`device/` Python package remains a hardware-neutral API client and mock
+integration path for local testing; the Arduino reference firmware is under
+`firmware/esp32_controller/`.
+
+Hardware captures accept JPEG only, are size-bounded and decoded server-side,
+and store safe camera metadata plus each capture lifecycle transition in the
+audit log. Basic framing validation checks a plausible aspect ratio; exposure
+is checked, and a calibrated blur threshold can be enabled with
+`DEVICE_MIN_SHARPNESS` (zero disables the heuristic). This is not face or
+subject detection. The backend does not trust image dimensions or ownership values
+supplied by the client. It derives dimensions from the decoded JPEG and
+ownership from the authenticated device session, then sends the capture through
+the same `VisionAnalysisService` used by app camera and upload requests.
 
 Device status is derived from the last heartbeat: `REGISTERED` before the first
 heartbeat, `ONLINE` while the heartbeat is within
 `DEVICE_HEARTBEAT_TIMEOUT_SECONDS` (five minutes by default), `OFFLINE` after
-that timeout, and `REVOKED` after owner revocation. The optional VL53L0X value
-is stored only as a positioning distance in millimetres; it is not a medical
-measurement.
+that timeout, `ERROR` as a reserved operational state, and `REVOKED` after
+owner revocation. The optional VL53L0X value is stored only as a positioning
+distance in millimetres; it is not a medical measurement.
 
-### Raspberry Pi setup
+### ESP32 setup
 
-The client is a Python HTTP client and does not install backend, database, or
-Gemini dependencies on the Pi. On Raspberry Pi OS Bookworm:
+See [`firmware/esp32_controller/README.md`](firmware/esp32_controller/README.md)
+for the board wiring, Arduino dependencies, firmware provisioning, and camera
+UART frame format. Production controller-to-backend traffic must use HTTPS with
+certificate validation enabled.
 
-1. Install Raspberry Pi OS, enable the camera in the supported `rpicam`
-   stack, and update the system:
-
-   ```bash
-   sudo apt update && sudo apt full-upgrade -y
-   sudo apt install -y python3-venv python3-picamera2 python3-pil python3-httpx
-   rpicam-hello --timeout 5000
-   ```
-
-2. Copy the `device/` package to the Pi, create a virtual environment if the
-   distribution packages are not being used, and configure only runtime values:
-
-   ```bash
-   python3 -m venv .venv
-   . .venv/bin/activate
-   pip install httpx Pillow
-   export VISION_VITALS_BACKEND_URL=https://api.example.com
-   export VISION_VITALS_DEVICE_IDENTIFIER=pi-unique-identifier
-   export VISION_VITALS_DEVICE_NAME="Vision Vitals Camera"
-   ```
-
-3. Register the device once using an owner access token, store the returned
-   device secret in a root-readable local environment file, then authenticate
-   the device. Do not put that secret in source control.
-
-4. Use `RaspberryPiCameraProvider` with a `CameraConfig`, call
-   `initialize()`, `capture()`, and `close()`. The client validates the image
-   locally; the backend validates it again.
-
-5. For the optional VL53L0X, install the CircuitPython dependencies supported
-   by the Pi image (`board`, `busio`, and `adafruit_vl53l0x`), wire the sensor to
-   I2C, call `initialize()`, and submit `read_distance_mm()`. This value is
-   positioning metadata only.
-
-6. Test the backend connection with the device client's `heartbeat()` and
-   `capture()` methods. For autostart, run the client from a systemd service
-   that reads an `EnvironmentFile` with mode `0600`; the repository does not
-   ship a service file because deployment paths and the device secret are
-   installation-specific.
+For a backend-only smoke test, use `device.MockHardwareDevice` against a local
+FastAPI server with `AI_PROVIDER=mock`; this exercises registration,
+authentication, heartbeat, JPEG capture, the shared analysis pipeline, and
+sensor readings without physical boards or Gemini credentials.
 
 ## Security boundary
 
@@ -121,9 +109,9 @@ AI responses are strictly validated and explicitly distinguish observations,
 estimations, warnings, limitations, and unavailable results. The backend does
 not turn AI output into a diagnosis and does not fabricate measurements.
 
-Raspberry Pi captures never call Gemini directly. Gemini credentials remain
-server-side, while the device receives only the analysis result returned by
-the backend.
+ESP32 firmware never calls Gemini directly. Gemini credentials, database
+credentials, and JWT signing secrets remain server-side; the device receives
+only a short-lived session and the analysis result returned by the backend.
 
 See [API.md](API.md), [ARCHITECTURE.md](ARCHITECTURE.md), [SECURITY.md](SECURITY.md),
 [DEPLOYMENT.md](DEPLOYMENT.md), and [CONTRIBUTING.md](CONTRIBUTING.md) for the

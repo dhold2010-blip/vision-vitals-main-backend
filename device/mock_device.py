@@ -43,9 +43,9 @@ class MockHardwareDevice:
 
     def capture(self, *, duplicate: bool = False, idempotency_key: str = "mock-capture-001") -> dict[str, Any]:
         with TemporaryDirectory() as directory:
-            image_path = Path(directory) / "mock-capture.png"
+            image_path = Path(directory) / "mock-capture.jpg"
             image = Image.new("RGB", (64, 64), (96, 120, 140))
-            image.save(image_path, format="PNG")
+            image.save(image_path, format="JPEG", quality=90)
             result = self.client.capture(image_path, idempotency_key=idempotency_key)
             self.last_capture = result
             if duplicate:

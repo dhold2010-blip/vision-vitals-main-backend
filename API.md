@@ -58,6 +58,7 @@ authentication:
 | GET | `/devices/{device_id}` | user | Read an owned device |
 | DELETE | `/devices/{device_id}` | user | Revoke device and active sessions |
 | POST | `/devices/{device_id}/rotate-credential` | user | Rotate secret and revoke sessions |
+| POST | `/devices/authenticate` | device ID + device secret | Firmware-friendly session authentication |
 | POST | `/devices/{device_id}/authenticate` | device secret | Issue short-lived device session |
 | POST | `/devices/{device_id}/heartbeat` | device session | Update heartbeat and software versions |
 | GET | `/devices/{device_id}/status` | device session | Read derived device status |
@@ -65,10 +66,39 @@ authentication:
 | POST | `/devices/{device_id}/capture` | device session | Upload a camera image |
 | POST | `/devices/{device_id}/sensor-readings` | device session | Submit VL53L0X distance metadata |
 
-Capture requests require `Idempotency-Key`. Repeating the same key for the
-same device returns the original capture rather than creating another
-analysis. Device status is `REGISTERED`, `ONLINE`, `OFFLINE`, or `REVOKED`;
-`ONLINE` is derived from the configured heartbeat timeout.
+Capture requests require a JPEG in multipart field `image`, the
+`X-Device-Session` header, and an `Idempotency-Key`. The optional
+`capture_metadata` multipart field is a JSON object with these supported keys:
+
+```json
+{
+  "image_source": "HARDWARE_CAMERA",
+  "camera_type": "ESP32_CAM",
+  "firmware_version": "1.0.0",
+  "software_version": "1.0.0",
+  "capture_timestamp": "2026-01-15T10:30:00Z",
+  "sensor_distance_mm": 350
+}
+```
+
+Image dimensions are decoded by the server; client-supplied dimensions are
+ignored. Repeating the same key for the same device returns the original
+capture rather than creating another analysis. Capture lifecycle events
+(`RECEIVED`, `VALIDATING`, `VALID`, `INVALID`, `PROCESSING`, `COMPLETED`, and
+`FAILED`) are stored in the device-capture record and audit log. Device status
+is `REGISTERED`, `ONLINE`, `OFFLINE`, `ERROR`, or `REVOKED`; `ONLINE` is derived
+from the configured heartbeat timeout. Device and sensor rate limits default
+to 10 authentications/minute per client/device, 30 heartbeats/minute per
+device, 12 captures/minute per device, and 60 sensor readings/minute per device.
+
+`sensor_type: "distance"` with `unit: "mm"` describes an optional VL53L0X
+positioning reading bounded to greater than 0 and at most 2000 mm. It is not a
+medical measurement. Production clients must
+use HTTPS; the API accepts only JPEG for hardware captures while regular
+`APP_CAMERA`/`UPLOAD` analysis requests retain JPEG and PNG support.
+Hardware quality checks include decoded dimensions, a basic aspect-ratio
+framing sanity check, brightness, and optional calibrated sharpness checking
+through `DEVICE_MIN_SHARPNESS`.
 
 ## Health and documentation
 

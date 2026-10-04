@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, File, Form, Header, Request, UploadFile
 from fastapi.responses import FileResponse
+from pydantic import ValidationError
 from starlette.concurrency import run_in_threadpool
 from sqlalchemy import select, update
 from sqlalchemy.orm import Session, joinedload
@@ -47,7 +48,9 @@ from .schemas import (
     RegisterRequest,
     DeleteAccountRequest,
     DeviceAuthenticateRequest,
+    DeviceAuthenticateByIdRequest,
     DeviceCaptureData,
+    DeviceCaptureMetadata,
     DeviceData,
     DeviceHeartbeatRequest,
     DeviceRegisterData,
@@ -370,8 +373,8 @@ def delete_account(
 
 
 def _device_status(device: Device) -> str:
-    if device.status == "REVOKED":
-        return "REVOKED"
+    if device.status in {"REVOKED", "ERROR"}:
+        return device.status
     if not device.last_seen_at:
         return "REGISTERED"
     last_seen = (
@@ -408,8 +411,30 @@ def _capture_data(capture: DeviceCapture) -> DeviceCaptureData:
         capture_type=capture.capture_type,
         status=capture.status,
         idempotency_key=capture.idempotency_key,
+        capture_metadata=capture.capture_metadata,
         created_at=capture.created_at,
         completed_at=capture.completed_at,
+    )
+
+
+def _capture_audit(
+    capture: DeviceCapture,
+    *,
+    user_id: str,
+    request_id_value: str,
+    action: str,
+    extra: dict | None = None,
+) -> AuditEvent:
+    details = {"device_id": capture.device_id, "status": capture.status}
+    if extra:
+        details.update(extra)
+    return AuditEvent(
+        user_id=user_id,
+        action=action,
+        resource_type="device_capture",
+        resource_id=capture.id,
+        request_id=request_id_value,
+        metadata_json=details,
     )
 
 
@@ -457,6 +482,80 @@ def register_device(
     db.refresh(device)
     data = DeviceRegisterData(**_device_data(device).model_dump(), device_secret=secret)
     return envelope(data, rid)
+
+
+def _authenticate_device(
+    device_id: str,
+    device_secret: str,
+    request: Request,
+    db: Session,
+    rid: str,
+):
+    device_rate_limiter.check(
+        f"auth:{request.client.host if request.client else 'unknown'}:{device_id}",
+        settings.device_auth_rate_limit,
+    )
+    device = db.scalar(select(Device).where(Device.id == device_id))
+    if (
+        not device
+        or device.status in {"REVOKED", "ERROR"}
+        or not verify_device_secret(device_secret, device.credential_hash if device else "")
+    ):
+        db.add(
+            AuditEvent(
+                user_id=device.owner_user_id if device else None,
+                action="DEVICE_AUTHENTICATION_FAILED",
+                resource_type="device",
+                resource_id=device_id,
+                request_id=rid,
+                metadata_json={},
+            )
+        )
+        db.commit()
+        raise AppError("DEVICE_INVALID_CREDENTIALS", "Device credentials are invalid", 401)
+    session_token = generate_device_session_token()
+    now = datetime.now(timezone.utc)
+    session = DeviceSession(
+        device_id=device.id,
+        token_hash=token_hash(session_token),
+        expires_at=now + timedelta(minutes=settings.device_session_expire_minutes),
+        last_seen_at=now,
+    )
+    device.last_seen_at = now
+    db.add(session)
+    db.add(
+        AuditEvent(
+            user_id=device.owner_user_id,
+            action="DEVICE_AUTHENTICATED",
+            resource_type="device_session",
+            resource_id=session.id,
+            request_id=rid,
+            metadata_json={"device_id": device.id},
+        )
+    )
+    db.commit()
+    db.refresh(session)
+    return envelope(
+        DeviceSessionData(
+            device_id=device.id,
+            session_identifier=session.id,
+            device_session_token=session_token,
+            created_at=session.created_at,
+            expires_at=session.expires_at,
+        ),
+        rid,
+    )
+
+
+@router.post("/devices/authenticate", response_model=Envelope)
+def authenticate_device_by_id(
+    body: DeviceAuthenticateByIdRequest,
+    request: Request,
+    db: Session = Depends(get_db),
+    rid: str = Depends(request_id),
+):
+    """Device firmware-friendly form of authentication with device_id in the body."""
+    return _authenticate_device(body.device_id, body.device_secret, request, db, rid)
 
 
 @router.get("/devices", response_model=Envelope)
@@ -562,58 +661,7 @@ def authenticate_device(
     db: Session = Depends(get_db),
     rid: str = Depends(request_id),
 ):
-    device_rate_limiter.check(
-        f"auth:{request.client.host if request.client else 'unknown'}:{device_id}",
-        settings.device_auth_rate_limit,
-    )
-    device = db.scalar(select(Device).where(Device.id == device_id))
-    if not device or device.status == "REVOKED" or not verify_device_secret(
-        body.device_secret, device.credential_hash if device else ""
-    ):
-        db.add(
-            AuditEvent(
-                user_id=device.owner_user_id if device else None,
-                action="DEVICE_AUTHENTICATION_FAILED",
-                resource_type="device",
-                resource_id=device_id,
-                request_id=rid,
-                metadata_json={},
-            )
-        )
-        db.commit()
-        raise AppError("DEVICE_INVALID_CREDENTIALS", "Device credentials are invalid", 401)
-    session_token = generate_device_session_token()
-    now = datetime.now(timezone.utc)
-    session = DeviceSession(
-        device_id=device.id,
-        token_hash=token_hash(session_token),
-        expires_at=now + timedelta(minutes=settings.device_session_expire_minutes),
-        last_seen_at=now,
-    )
-    device.last_seen_at = now
-    db.add(session)
-    db.add(
-        AuditEvent(
-            user_id=device.owner_user_id,
-            action="DEVICE_AUTHENTICATED",
-            resource_type="device_session",
-            resource_id=session.id,
-            request_id=rid,
-            metadata_json={"device_id": device.id},
-        )
-    )
-    db.commit()
-    db.refresh(session)
-    return envelope(
-        DeviceSessionData(
-            device_id=device.id,
-            session_identifier=session.id,
-            device_session_token=session_token,
-            created_at=session.created_at,
-            expires_at=session.expires_at,
-        ),
-        rid,
-    )
+    return _authenticate_device(device_id, body.device_secret, request, db, rid)
 
 
 @router.post("/devices/{device_id}/heartbeat", response_model=Envelope)
@@ -673,6 +721,7 @@ async def device_capture(
     request: Request,
     image: UploadFile = File(...),
     capture_type: str = Form(default="camera", max_length=32),
+    capture_metadata: str | None = Form(default=None, max_length=2048),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     device_auth: DeviceAuthContext = Depends(current_device_auth),
     db: Session = Depends(get_db),
@@ -704,52 +753,113 @@ async def device_capture(
             rid,
         )
 
+    try:
+        metadata = (
+            DeviceCaptureMetadata.model_validate_json(capture_metadata)
+            if capture_metadata
+            else DeviceCaptureMetadata()
+        )
+    except ValidationError as exc:
+        raise AppError("VALIDATION_ERROR", "Capture metadata is invalid", 422) from exc
+    capture_metadata_json = metadata.model_dump(
+        mode="json",
+        exclude_none=True,
+        exclude={"image_width", "image_height"},
+    )
+
     capture = DeviceCapture(
         device_id=device_id,
         user_id=device_auth.user.id,
         capture_type=capture_type,
         status="RECEIVED",
         idempotency_key=idempotency_key,
+        capture_metadata=capture_metadata_json,
     )
     db.add(capture)
     db.flush()
-    content = await image.read(settings.max_upload_size_mb * 1024 * 1024 + 1)
+    db.add(
+        _capture_audit(
+            capture,
+            user_id=device_auth.user.id,
+            request_id_value=rid,
+            action="DEVICE_CAPTURE_RECEIVED",
+        )
+    )
+    db.commit()
     capture.status = "VALIDATING"
+    db.add(
+        _capture_audit(
+            capture,
+            user_id=device_auth.user.id,
+            request_id_value=rid,
+            action="DEVICE_CAPTURE_VALIDATING",
+        )
+    )
+    db.commit()
     try:
-        ImageQualityService().validate_or_raise(content, enforce_exposure=True)
+        content = await image.read(settings.max_upload_size_mb * 1024 * 1024 + 1)
+        if len(content) > settings.max_upload_size_mb * 1024 * 1024:
+            raise AppError("UPLOAD_TOO_LARGE", "The image exceeds the upload size limit", 413)
+        if image.content_type != "image/jpeg":
+            raise AppError("UPLOAD_INVALID", "Hardware captures must use JPEG", 422)
+        quality = ImageQualityService().validate_or_raise(
+            content, enforce_exposure=True, expected_format="JPEG"
+        )
         validation_storage = LocalStorageProvider(
             max_bytes=settings.max_upload_size_mb * 1024 * 1024
         )
         stored_check = validation_storage.save_image(
-            content, image.filename or "capture", image.content_type or ""
+            content, "esp32-capture.jpg", "image/jpeg"
         )
         validation_storage.delete(stored_check.storage_key)
+        capture.capture_metadata = {
+            **capture_metadata_json,
+            "image_source": "HARDWARE_CAMERA",
+            "camera_type": "ESP32_CAM",
+            "image_width": quality.width,
+            "image_height": quality.height,
+        }
     except AppError as exc:
         capture.status = "INVALID"
         db.add(
-            AuditEvent(
+            _capture_audit(
+                capture,
                 user_id=device_auth.user.id,
-                action="DEVICE_CAPTURE_REJECTED",
-                resource_type="device_capture",
-                resource_id=capture.id,
-                request_id=rid,
-                metadata_json={"code": exc.code},
+                request_id_value=rid,
+                action="DEVICE_CAPTURE_INVALID",
+                extra={"code": exc.code},
             )
         )
         db.commit()
         raise
     capture.status = "VALID"
+    db.add(
+        _capture_audit(
+            capture,
+            user_id=device_auth.user.id,
+            request_id_value=rid,
+            action="DEVICE_CAPTURE_VALID",
+        )
+    )
     db.commit()
     try:
         capture.status = "PROCESSING"
+        db.add(
+            _capture_audit(
+                capture,
+                user_id=device_auth.user.id,
+                request_id_value=rid,
+                action="DEVICE_CAPTURE_PROCESSING",
+            )
+        )
         db.commit()
         analysis = await run_in_threadpool(
             VisionAnalysisService(db, LocalStorageProvider(), get_ai_provider()).create,
             device_auth.user.id,
             rid,
             content,
-            image.filename or "capture",
-            image.content_type or "",
+            "esp32-capture.jpg",
+            "image/jpeg",
             "HARDWARE_CAMERA",
         )
         capture = db.get(DeviceCapture, capture.id)
@@ -757,13 +867,12 @@ async def device_capture(
         capture.status = "COMPLETED"
         capture.completed_at = datetime.now(timezone.utc)
         db.add(
-            AuditEvent(
+            _capture_audit(
+                capture,
                 user_id=device_auth.user.id,
-                action="DEVICE_CAPTURE_SUBMITTED",
-                resource_type="device_capture",
-                resource_id=capture.id,
-                request_id=rid,
-                metadata_json={"analysis_id": analysis.id, "device_id": device_id},
+                request_id_value=rid,
+                action="DEVICE_CAPTURE_COMPLETED",
+                extra={"analysis_id": analysis.id},
             )
         )
         db.commit()
@@ -771,6 +880,14 @@ async def device_capture(
         capture = db.get(DeviceCapture, capture.id)
         if capture:
             capture.status = "FAILED"
+            db.add(
+                _capture_audit(
+                    capture,
+                    user_id=device_auth.user.id,
+                    request_id_value=rid,
+                    action="DEVICE_CAPTURE_FAILED",
+                )
+            )
             db.commit()
         raise
     return envelope(

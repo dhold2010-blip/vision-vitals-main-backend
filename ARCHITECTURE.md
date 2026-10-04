@@ -28,9 +28,10 @@ Part 2 adds a device boundary in front of the same pipeline:
 VisionAnalysisService → AIProvider`
 
 `Device`, `DeviceSession`, `DeviceCapture`, and `SensorReading` are backend
-models. The Raspberry Pi in `device/` is an HTTPS input client only; it does
-not access the database or AI provider. `DeviceCapture` owns idempotency and
-server-controlled lifecycle status, while `AnalysisImage.source` distinguishes
+models. The ESP32 controller and ESP32-CAM firmware are HTTPS input/control
+clients only; neither has access to the database or AI provider. `DeviceCapture`
+owns idempotency, safe capture metadata, and server-controlled lifecycle status,
+while `AnalysisImage.source` distinguishes
 `APP_CAMERA`, `HARDWARE_CAMERA`, and `UPLOAD`.
 
 Both app uploads and hardware captures call `ImageQualityService`, then

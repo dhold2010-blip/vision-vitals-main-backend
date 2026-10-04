@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from PIL import Image
 
 from tests.conftest import auth_headers, register
+from vision_vitals.db import SessionLocal
+from vision_vitals.models import AnalysisImage
 
 
 def test_health_and_openapi(client):
@@ -14,6 +16,7 @@ def test_health_and_openapi(client):
     spec = client.get("/openapi.json")
     assert spec.status_code == 200
     assert "/api/v1/analyses" in spec.json()["paths"]
+    assert "/api/v1/devices/authenticate" in spec.json()["paths"]
 
 
 def test_registration_login_and_invalid_credentials(client):
@@ -134,3 +137,23 @@ def test_upload_validation_and_metric_sources(client):
         },
     )
     assert unavailable.status_code == 201
+
+
+def test_app_camera_and_upload_keep_their_source_labels(client):
+    data = register(client, "analysis-sources@example.com")
+    headers = auth_headers(data)
+    for source in ("APP_CAMERA", "UPLOAD"):
+        image = io.BytesIO()
+        Image.new("RGB", (64, 64), (96, 120, 140)).save(image, format="JPEG")
+        response = client.post(
+            "/api/v1/analyses",
+            headers=headers,
+            data={"source": source},
+            files={"image": (f"{source.lower()}.jpg", image.getvalue(), "image/jpeg")},
+        )
+        assert response.status_code == 201, response.text
+        with SessionLocal() as db:
+            stored = db.query(AnalysisImage).filter(
+                AnalysisImage.analysis_id == response.json()["data"]["id"]
+            ).one()
+            assert stored.source == source

@@ -1,1 +1,1 @@
-"""Raspberry Pi client for the Vision Vitals device API."""
+"""Hardware-neutral client and mock integration for the Vision Vitals device API."""

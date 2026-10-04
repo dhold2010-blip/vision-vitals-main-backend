@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 import math
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -148,9 +148,11 @@ class HealthMetricData(HealthMetricCreate):
 
 
 class DeviceRegisterRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     device_identifier: str = Field(min_length=1, max_length=128)
     device_name: str = Field(min_length=1, max_length=120)
-    device_type: str = Field(default="VISION_VITALS_CAMERA", min_length=1, max_length=64)
+    device_type: Literal["VISION_VITALS_CAMERA"] = "VISION_VITALS_CAMERA"
     firmware_version: str | None = Field(default=None, max_length=64)
     software_version: str | None = Field(default=None, max_length=64)
 
@@ -173,7 +175,13 @@ class DeviceRegisterData(DeviceData):
 
 
 class DeviceAuthenticateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     device_secret: str = Field(min_length=20, max_length=256)
+
+
+class DeviceAuthenticateByIdRequest(DeviceAuthenticateRequest):
+    device_id: str = Field(min_length=1, max_length=36)
 
 
 class DeviceSessionData(BaseModel):
@@ -197,8 +205,31 @@ class DeviceCaptureData(BaseModel):
     capture_type: str
     status: str
     idempotency_key: str
+    capture_metadata: dict[str, Any]
     created_at: datetime
     completed_at: datetime | None
+
+
+class DeviceCaptureMetadata(BaseModel):
+    """Small, non-sensitive hardware metadata envelope; image facts are server-derived."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    image_source: Literal["HARDWARE_CAMERA"] = "HARDWARE_CAMERA"
+    camera_type: Literal["ESP32_CAM"] = "ESP32_CAM"
+    firmware_version: str | None = Field(default=None, max_length=64)
+    software_version: str | None = Field(default=None, max_length=64)
+    capture_timestamp: datetime | None = None
+    sensor_distance_mm: float | None = Field(default=None, gt=0, le=2000)
+    image_width: int | None = Field(default=None, ge=1, le=8192)
+    image_height: int | None = Field(default=None, ge=1, le=8192)
+
+    @field_validator("capture_timestamp")
+    @classmethod
+    def validate_capture_timestamp(cls, value: datetime | None) -> datetime | None:
+        if value is not None and value.tzinfo is None:
+            raise ValueError("capture_timestamp must include a timezone")
+        return value.astimezone(timezone.utc) if value is not None else None
 
 
 class SensorReadingCreate(BaseModel):
@@ -212,8 +243,8 @@ class SensorReadingCreate(BaseModel):
     @field_validator("value")
     @classmethod
     def validate_distance(cls, value: float) -> float:
-        if not math.isfinite(value) or value < 0 or value > 2000:
-            raise ValueError("distance must be a finite value between 0 and 2000 mm")
+        if not math.isfinite(value) or value <= 0 or value > 2000:
+            raise ValueError("distance must be a finite value greater than 0 and at most 2000 mm")
         return value
 
     @field_validator("timestamp")
