@@ -33,6 +33,7 @@ class Settings:
     auth_registration_rate_limit: int = int(os.getenv("AUTH_REGISTRATION_RATE_LIMIT", "5"))
     auth_refresh_rate_limit: int = int(os.getenv("AUTH_REFRESH_RATE_LIMIT", "20"))
     password_rate_limit: int = int(os.getenv("PASSWORD_RATE_LIMIT", "5"))
+    app_capture_rate_limit: int = int(os.getenv("APP_CAPTURE_RATE_LIMIT", "3"))
     device_min_image_width: int = int(os.getenv("DEVICE_MIN_IMAGE_WIDTH", "8"))
     device_min_image_height: int = int(os.getenv("DEVICE_MIN_IMAGE_HEIGHT", "8"))
     device_min_sharpness: float = float(os.getenv("DEVICE_MIN_SHARPNESS", "0"))
@@ -65,6 +66,7 @@ class Settings:
             "auth_registration_rate_limit",
             "auth_refresh_rate_limit",
             "password_rate_limit",
+            "app_capture_rate_limit",
         ):
             if getattr(self, name) < 1:
                 raise RuntimeError(f"{name.upper()} must be positive")

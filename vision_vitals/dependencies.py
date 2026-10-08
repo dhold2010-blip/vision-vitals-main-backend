@@ -63,6 +63,16 @@ def current_auth(
     return AuthContext(user=user, session=session, token_payload=payload)
 
 
+def optional_current_auth(
+    request: Request,
+    db: Session = Depends(get_db),
+    credentials: HTTPAuthorizationCredentials | None = Security(bearer_scheme),
+) -> AuthContext | None:
+    if credentials is None:
+        return None
+    return current_auth(request, db, credentials)
+
+
 def admin_auth(auth: AuthContext = Depends(current_auth)) -> AuthContext:
     if auth.user.role != "ADMIN":
         raise AppError("AUTH_FORBIDDEN", "Administrator access is required", 403)

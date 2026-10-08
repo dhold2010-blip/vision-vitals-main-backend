@@ -7,13 +7,22 @@ from PIL import Image
 
 from tests.conftest import auth_headers, register
 from vision_vitals.db import SessionLocal
-from vision_vitals.models import AnalysisImage, AuditEvent, DeviceCapture, DeviceSession
+from vision_vitals.models import Analysis, AnalysisImage, AuditEvent, DeviceCapture, DeviceSession
+from vision_vitals.schemas import DeviceCaptureMetadata
 
 
 def image_bytes(color=(96, 120, 140), size=(64, 64), format="JPEG"):
     output = io.BytesIO()
     Image.new("RGB", size, color).save(output, format=format)
     return output.getvalue()
+
+
+def test_device_capture_metadata_accepts_matching_app_camera_pair():
+    metadata = DeviceCaptureMetadata.model_validate(
+        {"image_source": "APP_CAMERA", "camera_type": "FRONTEND_CAMERA"}
+    )
+    assert metadata.image_source == "APP_CAMERA"
+    assert metadata.camera_type == "FRONTEND_CAMERA"
 
 
 def register_and_authenticate_device(client, owner):
@@ -116,6 +125,91 @@ def test_capture_uses_unified_pipeline_and_is_idempotent(client):
     assert duplicate.status_code == 200
     assert duplicate.json()["data"]["duplicate"] is True
     assert duplicate.json()["data"]["capture"]["id"] == first.json()["data"]["capture"]["id"]
+
+
+def test_app_camera_capture_requires_an_authenticated_user(client):
+    owner = register(client, "app-capture-auth@example.com")
+    device, headers = register_and_authenticate_device(client, owner)
+
+    response = client.post(
+        f"/api/v1/devices/{device['id']}/capture",
+        headers={**headers, "Idempotency-Key": "app-capture-unauthenticated"},
+        files={"image": ("capture.jpg", image_bytes(), "image/jpeg")},
+        data={
+            "capture_type": "APP_CAMERA",
+            "capture_metadata": (
+                '{"image_source":"APP_CAMERA","camera_type":"FRONTEND_CAMERA"}'
+            ),
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "AUTH_UNAUTHORIZED"
+
+
+def test_app_camera_capture_belongs_to_authenticated_user(client):
+    owner = register(client, "app-capture-owner@example.com")
+    device, device_headers = register_and_authenticate_device(client, owner)
+    response = client.post(
+        f"/api/v1/devices/{device['id']}/capture",
+        headers={
+            **device_headers,
+            **auth_headers(owner),
+            "Idempotency-Key": "app-capture-user-owned",
+        },
+        files={"image": ("capture.jpg", image_bytes(), "image/jpeg")},
+        data={
+            "capture_type": "APP_CAMERA",
+            "capture_metadata": (
+                '{"image_source":"APP_CAMERA","camera_type":"FRONTEND_CAMERA"}'
+            ),
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    result = response.json()["data"]
+    assert result["capture"]["status"] == "COMPLETED"
+    assert result["capture"]["user_id"] == owner["user"]["id"]
+    with SessionLocal() as db:
+        analysis = db.query(Analysis).filter(
+            Analysis.id == result["analysis"]["id"]
+        ).one()
+        assert analysis.user_id == owner["user"]["id"]
+
+
+def test_app_camera_capture_is_rate_limited_per_user(client, monkeypatch):
+    from dataclasses import replace
+
+    from vision_vitals import api
+
+    monkeypatch.setattr(
+        api,
+        "settings",
+        replace(api.settings, app_capture_rate_limit=1),
+    )
+    owner = register(client, "app-capture-limit@example.com")
+    device, device_headers = register_and_authenticate_device(client, owner)
+    headers = {**device_headers, **auth_headers(owner)}
+    data = {
+        "capture_type": "APP_CAMERA",
+        "capture_metadata": '{"image_source":"APP_CAMERA","camera_type":"FRONTEND_CAMERA"}',
+    }
+
+    first = client.post(
+        f"/api/v1/devices/{device['id']}/capture",
+        headers={**headers, "Idempotency-Key": "app-capture-limit-one"},
+        files={"image": ("capture.jpg", image_bytes(), "image/jpeg")},
+        data=data,
+    )
+    second = client.post(
+        f"/api/v1/devices/{device['id']}/capture",
+        headers={**headers, "Idempotency-Key": "app-capture-limit-two"},
+        files={"image": ("capture.jpg", image_bytes(), "image/jpeg")},
+        data=data,
+    )
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 429
 
 
 def test_capture_rejects_corrupt_or_unsafe_images(client):

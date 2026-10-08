@@ -18,6 +18,7 @@ from .dependencies import (
     admin_auth,
     current_auth,
     current_device_auth,
+    optional_current_auth,
     request_id,
 )
 from .errors import AppError
@@ -724,6 +725,7 @@ async def device_capture(
     capture_metadata: str | None = Form(default=None, max_length=2048),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     device_auth: DeviceAuthContext = Depends(current_device_auth),
+    user_auth: AuthContext | None = Depends(optional_current_auth),
     db: Session = Depends(get_db),
     rid: str = Depends(request_id),
 ):
@@ -734,6 +736,30 @@ async def device_capture(
         or idempotency_key.strip() != idempotency_key
     ):
         raise AppError("IDEMPOTENCY_REQUIRED", "Idempotency-Key is required", 422)
+    try:
+        metadata = (
+            DeviceCaptureMetadata.model_validate_json(capture_metadata)
+            if capture_metadata
+            else DeviceCaptureMetadata()
+        )
+    except ValidationError as exc:
+        raise AppError("VALIDATION_ERROR", "Capture metadata is invalid", 422) from exc
+    is_app_capture = capture_type == "APP_CAMERA" or metadata.image_source == "APP_CAMERA"
+    if is_app_capture and (
+        capture_type != "APP_CAMERA"
+        or metadata.image_source != "APP_CAMERA"
+        or user_auth is None
+    ):
+        raise AppError(
+            "AUTH_UNAUTHORIZED",
+            "An authenticated user is required for app camera captures",
+            401,
+        )
+    capture_user = user_auth.user if is_app_capture else device_auth.user
+    if is_app_capture:
+        auth_rate_limiter.check(
+            f"app-capture:{capture_user.id}", settings.app_capture_rate_limit
+        )
     existing = db.scalar(
         select(DeviceCapture).where(
             DeviceCapture.device_id == device_id,
@@ -741,6 +767,8 @@ async def device_capture(
         )
     )
     if existing:
+        if existing.user_id != capture_user.id:
+            raise AppError("RESOURCE_FORBIDDEN", "This capture belongs to another user", 403)
         analysis = db.scalar(
             select(Analysis).options(joinedload(Analysis.result)).where(Analysis.id == existing.analysis_id)
         ) if existing.analysis_id else None
@@ -752,15 +780,6 @@ async def device_capture(
             },
             rid,
         )
-
-    try:
-        metadata = (
-            DeviceCaptureMetadata.model_validate_json(capture_metadata)
-            if capture_metadata
-            else DeviceCaptureMetadata()
-        )
-    except ValidationError as exc:
-        raise AppError("VALIDATION_ERROR", "Capture metadata is invalid", 422) from exc
     capture_metadata_json = metadata.model_dump(
         mode="json",
         exclude_none=True,
@@ -769,7 +788,7 @@ async def device_capture(
 
     capture = DeviceCapture(
         device_id=device_id,
-        user_id=device_auth.user.id,
+        user_id=capture_user.id,
         capture_type=capture_type,
         status="RECEIVED",
         idempotency_key=idempotency_key,
@@ -780,7 +799,7 @@ async def device_capture(
     db.add(
         _capture_audit(
             capture,
-            user_id=device_auth.user.id,
+            user_id=capture_user.id,
             request_id_value=rid,
             action="DEVICE_CAPTURE_RECEIVED",
         )
@@ -790,7 +809,7 @@ async def device_capture(
     db.add(
         _capture_audit(
             capture,
-            user_id=device_auth.user.id,
+            user_id=capture_user.id,
             request_id_value=rid,
             action="DEVICE_CAPTURE_VALIDATING",
         )
@@ -801,21 +820,24 @@ async def device_capture(
         if len(content) > settings.max_upload_size_mb * 1024 * 1024:
             raise AppError("UPLOAD_TOO_LARGE", "The image exceeds the upload size limit", 413)
         if image.content_type != "image/jpeg":
-            raise AppError("UPLOAD_INVALID", "Hardware captures must use JPEG", 422)
+            raise AppError("UPLOAD_INVALID", "Camera captures must use JPEG", 422)
         quality = ImageQualityService().validate_or_raise(
             content, enforce_exposure=True, expected_format="JPEG"
         )
         validation_storage = LocalStorageProvider(
             max_bytes=settings.max_upload_size_mb * 1024 * 1024
         )
-        stored_check = validation_storage.save_image(
-            content, "esp32-capture.jpg", "image/jpeg"
+        capture_filename = (
+            "esp32-capture.jpg"
+            if metadata.image_source == "HARDWARE_CAMERA"
+            else "app-camera-capture.jpg"
         )
+        stored_check = validation_storage.save_image(content, capture_filename, "image/jpeg")
         validation_storage.delete(stored_check.storage_key)
         capture.capture_metadata = {
             **capture_metadata_json,
-            "image_source": "HARDWARE_CAMERA",
-            "camera_type": "ESP32_CAM",
+            "image_source": metadata.image_source,
+            "camera_type": metadata.camera_type,
             "image_width": quality.width,
             "image_height": quality.height,
         }
@@ -824,7 +846,7 @@ async def device_capture(
         db.add(
             _capture_audit(
                 capture,
-                user_id=device_auth.user.id,
+                user_id=capture_user.id,
                 request_id_value=rid,
                 action="DEVICE_CAPTURE_INVALID",
                 extra={"code": exc.code},
@@ -836,7 +858,7 @@ async def device_capture(
     db.add(
         _capture_audit(
             capture,
-            user_id=device_auth.user.id,
+            user_id=capture_user.id,
             request_id_value=rid,
             action="DEVICE_CAPTURE_VALID",
         )
@@ -847,7 +869,7 @@ async def device_capture(
         db.add(
             _capture_audit(
                 capture,
-                user_id=device_auth.user.id,
+                user_id=capture_user.id,
                 request_id_value=rid,
                 action="DEVICE_CAPTURE_PROCESSING",
             )
@@ -855,12 +877,12 @@ async def device_capture(
         db.commit()
         analysis = await run_in_threadpool(
             VisionAnalysisService(db, LocalStorageProvider(), get_ai_provider()).create,
-            device_auth.user.id,
+            capture_user.id,
             rid,
             content,
-            "esp32-capture.jpg",
+            capture_filename,
             "image/jpeg",
-            "HARDWARE_CAMERA",
+            metadata.image_source,
         )
         capture = db.get(DeviceCapture, capture.id)
         capture.analysis_id = analysis.id
@@ -869,7 +891,7 @@ async def device_capture(
         db.add(
             _capture_audit(
                 capture,
-                user_id=device_auth.user.id,
+                user_id=capture_user.id,
                 request_id_value=rid,
                 action="DEVICE_CAPTURE_COMPLETED",
                 extra={"analysis_id": analysis.id},
@@ -883,7 +905,7 @@ async def device_capture(
             db.add(
                 _capture_audit(
                     capture,
-                    user_id=device_auth.user.id,
+                    user_id=capture_user.id,
                     request_id_value=rid,
                     action="DEVICE_CAPTURE_FAILED",
                 )

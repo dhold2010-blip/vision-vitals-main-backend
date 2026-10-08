@@ -211,18 +211,28 @@ class DeviceCaptureData(BaseModel):
 
 
 class DeviceCaptureMetadata(BaseModel):
-    """Small, non-sensitive hardware metadata envelope; image facts are server-derived."""
+    """Small, non-sensitive camera metadata envelope; image facts are server-derived."""
 
     model_config = ConfigDict(extra="forbid")
 
-    image_source: Literal["HARDWARE_CAMERA"] = "HARDWARE_CAMERA"
-    camera_type: Literal["ESP32_CAM"] = "ESP32_CAM"
+    image_source: Literal["HARDWARE_CAMERA", "APP_CAMERA"] = "HARDWARE_CAMERA"
+    camera_type: Literal["ESP32_CAM", "FRONTEND_CAMERA"] = "ESP32_CAM"
     firmware_version: str | None = Field(default=None, max_length=64)
     software_version: str | None = Field(default=None, max_length=64)
     capture_timestamp: datetime | None = None
     sensor_distance_mm: float | None = Field(default=None, gt=0, le=2000)
     image_width: int | None = Field(default=None, ge=1, le=8192)
     image_height: int | None = Field(default=None, ge=1, le=8192)
+
+    @model_validator(mode="after")
+    def validate_camera_source(self) -> DeviceCaptureMetadata:
+        supported_cameras = {
+            ("HARDWARE_CAMERA", "ESP32_CAM"),
+            ("APP_CAMERA", "FRONTEND_CAMERA"),
+        }
+        if (self.image_source, self.camera_type) not in supported_cameras:
+            raise ValueError("image_source and camera_type must describe the same camera")
+        return self
 
     @field_validator("capture_timestamp")
     @classmethod
