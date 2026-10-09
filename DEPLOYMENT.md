@@ -74,3 +74,12 @@ See `firmware/esp32_controller/README.md` for the ESP32 DevKit, ESP32-CAM
 set a trusted backend root CA in the untracked firmware secrets header. The
 firmware intentionally has no plain-HTTP production fallback and never disables
 TLS verification.
+
+## Frontend rollout checks
+
+- Configure the frontend host with the server-side backend base URL: `VISION_VITALS_BACKEND_URL=https://vision-vitals-main-backend.onrender.com`.
+- Verify the Render trusted-host allowlist includes `vision-vitals-main-backend.onrender.com`.
+- Verify the configured AI provider is intentional. The `mock` provider does not represent production AI inference.
+- Confirm scan-image storage is persistent across restarts before relying on saved image access.
+- Check `/api/v1/health/live` and `/api/v1/health/ready`, then test login, profile, device registration, camera capture, analysis history, deletion, and revocation with a test account.
+- Do not change the production database URL or run migrations as part of a frontend-only release.
