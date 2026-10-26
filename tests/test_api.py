@@ -157,3 +157,73 @@ def test_app_camera_and_upload_keep_their_source_labels(client):
                 AnalysisImage.analysis_id == response.json()["data"]["id"]
             ).one()
             assert stored.source == source
+
+
+def test_profile_update_is_persistent_and_user_scoped(client):
+    owner = register(client, "profile-owner@example.com")
+    other = register(client, "profile-other@example.com")
+    owner_headers = auth_headers(owner)
+    other_headers = auth_headers(other)
+
+    updated = client.patch(
+        "/api/v1/users/me/profile",
+        headers=owner_headers,
+        json={"display_name": "Jordan", "timezone": "Asia/Calcutta"},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["data"] == {
+        "display_name": "Jordan",
+        "timezone": "Asia/Calcutta",
+    }
+
+    reloaded = client.get("/api/v1/users/me", headers=owner_headers)
+    assert reloaded.status_code == 200
+    assert reloaded.json()["data"]["profile"] == {
+        "display_name": "Jordan",
+        "timezone": "Asia/Calcutta",
+    }
+    other_profile = client.get("/api/v1/users/me", headers=other_headers)
+    assert other_profile.status_code == 200
+    assert other_profile.json()["data"]["profile"] == {
+        "display_name": None,
+        "timezone": None,
+    }
+
+
+def test_analysis_delete_is_owner_scoped_and_removes_saved_data(client):
+    owner = register(client, "analysis-delete-owner@example.com")
+    other = register(client, "analysis-delete-other@example.com")
+    image = io.BytesIO()
+    Image.new("RGB", (64, 64), (96, 120, 140)).save(image, format="JPEG")
+    created = client.post(
+        "/api/v1/analyses",
+        headers=auth_headers(owner),
+        files={"image": ("saved.jpg", image.getvalue(), "image/jpeg")},
+    )
+    assert created.status_code == 201, created.text
+    analysis_id = created.json()["data"]["id"]
+    assert client.get(
+        f"/api/v1/analyses/{analysis_id}/image",
+        headers=auth_headers(owner),
+    ).status_code == 200
+
+    forbidden = client.delete(
+        f"/api/v1/analyses/{analysis_id}", headers=auth_headers(other)
+    )
+    assert forbidden.status_code == 403
+    assert client.get(
+        f"/api/v1/analyses/{analysis_id}", headers=auth_headers(owner)
+    ).status_code == 200
+
+    deleted = client.delete(
+        f"/api/v1/analyses/{analysis_id}", headers=auth_headers(owner)
+    )
+    assert deleted.status_code == 200
+    assert deleted.json()["data"]["deleted"] is True
+    assert client.get(
+        f"/api/v1/analyses/{analysis_id}", headers=auth_headers(owner)
+    ).status_code == 404
+    assert client.get(
+        f"/api/v1/analyses/{analysis_id}/image", headers=auth_headers(owner)
+    ).status_code == 404
+    assert client.get("/api/v1/analyses", headers=auth_headers(owner)).json()["data"] == []
