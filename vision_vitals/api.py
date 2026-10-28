@@ -73,6 +73,7 @@ from .security import (
     verify_device_secret,
 )
 from .pose import PoseCapture
+from .supplemental import MeasurementInputs
 from .quality import ImageQualityService
 from .rate_limit import auth_rate_limiter, device_rate_limiter, password_rate_limiter
 from .services import VisionAnalysisService
@@ -957,6 +958,7 @@ async def create_analysis(
     image: UploadFile = File(...),
     source: str = Form(default="UPLOAD"),
     pose_capture: str | None = Form(default=None, max_length=16000),
+    measurement_inputs: str | None = Form(default=None, max_length=4000),
     auth: AuthContext = Depends(current_auth),
     db: Session = Depends(get_db),
     rid: str = Depends(request_id),
@@ -970,6 +972,12 @@ async def create_analysis(
     content = await image.read(settings.max_upload_size_mb * 1024 * 1024 + 1)
     if len(content) > settings.max_upload_size_mb * 1024 * 1024:
         raise AppError("UPLOAD_TOO_LARGE", "The image exceeds the upload size limit", 413)
+    inputs = None
+    if measurement_inputs is not None:
+        try:
+            inputs = MeasurementInputs.model_validate_json(measurement_inputs)
+        except ValidationError as exc:
+            raise AppError("VALIDATION_ERROR", "Invalid measurement inputs", 422) from exc
     pose = None
     if pose_capture is not None:
         try:
@@ -986,6 +994,7 @@ async def create_analysis(
         image.content_type or "",
         source,
         pose,
+        inputs,
     )
     return envelope(_analysis_data(analysis), rid)
 
@@ -1120,6 +1129,7 @@ def _analysis_data(analysis: Analysis) -> AnalysisData:
             limitations=analysis.result.limitations,
             visual_assessment=analysis.result.visual_assessment,
             camera_metrics=analysis.result.camera_metrics,
+            supplemental_metrics=analysis.result.supplemental_metrics,
             request_id=analysis.result.request_id,
         )
     return AnalysisData(

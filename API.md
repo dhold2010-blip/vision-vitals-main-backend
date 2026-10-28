@@ -166,3 +166,33 @@ These are browser-supplied landmark estimates, not independently attested
 server detections, calibrated 3D joint measurements, or medical readings.
 Perspective and camera tilt affect them. No height, weight, pulse, age, body
 composition or overall health/posture score is inferred from appearance.
+
+### Entered readings and guided reference height (version 1)
+
+`POST /api/v1/analyses` also accepts optional `measurement_inputs` JSON (4,000
+characters max). Fields: `version:1`, `age_years` (integer 0–120), `height_cm`
+(40–260), `weight_kg` (2–500), `pulse_bpm` (integer 20–250), and optional
+`height_reference`. Numeric values must be finite JSON numbers. Unknown fields
+and invalid ranges are rejected. These bounds validate input, not clinical normality.
+
+A `height_reference` contains image `width`/`height`, `reference_cm` (20–250),
+`same_plane_confirmed:true` and four normalized `{x,y}` points in order: reference
+top, reference bottom, head top, foot soles. The server validates same-image
+geometry, visible landmarks, upright legs/torso, noncollapsed vertical spans,
+reasonable head/feet alignment and supported output height (80–250 cm). It
+computes reference_cm * marked_body_pixel_height / reference_pixel_height,
+rounded to whole cm. Actual equal depth and known reference size cannot be
+verified automatically; the result is labeled a rough, unvalidated reference
+estimate with those assumptions. It is not used for BMI.
+
+`result.supplemental_metrics` stores six values with unit, source, status and
+reason. Age/height/weight/pulse are `USER_PROVIDED`/`RECORDED`; BMI is `CALCULATED`
+only from entered measured height and weight with age 20+; reference height is
+`CAMERA_REFERENCE`/`ESTIMATED`. Unavailable readings are null with explicit
+instructions. No pediatric BMI classification, body-fat inference, clinical
+interpretation or health score is supplied. BMI method:
+https://www.cdc.gov/bmi/adult-calculator/
+
+Migration 0006 adds the nullable JSON column; old reports remain unchanged.
+Inputs are not passed to Gemini. Saved reports retain the values and source
+labels, not the raw reference mark coordinates. Account ownership rules apply.

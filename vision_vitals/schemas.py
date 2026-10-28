@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from .pose import CameraMetrics
+from .supplemental import SupplementalMetrics
 
 from datetime import datetime, timedelta, timezone
 import math
@@ -136,6 +137,7 @@ class AIAnalysisResponse(BaseModel):
 class AnalysisResultData(AIAnalysisResponse):
     # Kept separate so generative AI cannot supply camera measurements.
     camera_metrics: CameraMetrics | None = None
+    supplemental_metrics: SupplementalMetrics | None = None
 
 
 class AnalysisData(BaseModel):
