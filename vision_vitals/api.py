@@ -961,7 +961,13 @@ async def create_analysis(
 ):
     if source not in {"APP_CAMERA", "UPLOAD"}:
         raise AppError("VALIDATION_ERROR", "Unsupported image source", 422)
+    if source == "APP_CAMERA":
+        auth_rate_limiter.check(
+            f"app-capture:{auth.user.id}", settings.app_capture_rate_limit
+        )
     content = await image.read(settings.max_upload_size_mb * 1024 * 1024 + 1)
+    if len(content) > settings.max_upload_size_mb * 1024 * 1024:
+        raise AppError("UPLOAD_TOO_LARGE", "The image exceeds the upload size limit", 413)
     service = VisionAnalysisService(db, LocalStorageProvider(), get_ai_provider())
     analysis = await run_in_threadpool(
         service.create,

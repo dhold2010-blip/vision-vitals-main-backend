@@ -157,3 +157,88 @@ def test_app_camera_and_upload_keep_their_source_labels(client):
                 AnalysisImage.analysis_id == response.json()["data"]["id"]
             ).one()
             assert stored.source == source
+
+
+def test_phone_scan_requires_user_but_no_device_and_preserves_ownership(client, monkeypatch):
+    from dataclasses import replace
+
+    from vision_vitals import dependencies
+    from vision_vitals.models import Device, DeviceSession
+
+    # Phone scans remain usable when the separate hardware feature is disabled.
+    monkeypatch.setattr(
+        dependencies, "settings", replace(dependencies.settings, device_auth_enabled=False)
+    )
+    owner = register(client, "phone-owner@example.com")
+    other = register(client, "phone-other@example.com")
+    content = io.BytesIO()
+    Image.new("RGB", (64, 64), (96, 120, 140)).save(content, format="JPEG")
+    upload = {"image": ("phone.jpg", content.getvalue(), "image/jpeg")}
+    unauthorized = client.post(
+        "/api/v1/analyses", data={"source": "APP_CAMERA"}, files=upload
+    )
+    assert unauthorized.status_code == 401
+    assert unauthorized.json()["error"]["code"] == "AUTH_UNAUTHORIZED"
+    response = client.post(
+        "/api/v1/analyses", headers=auth_headers(owner),
+        data={"source": "APP_CAMERA"}, files=upload,
+    )
+    assert response.status_code == 201, response.text
+    analysis = response.json()["data"]
+    assert analysis["status"] == "COMPLETED"
+    assert analysis["result"]["observation"]
+    assert "analysis" not in analysis  # The frontend consumes the analysis directly.
+    assert client.get(
+        f"/api/v1/analyses/{analysis['id']}", headers=auth_headers(other)
+    ).status_code == 403
+    with SessionLocal() as db:
+        assert db.query(Device).count() == 0
+        assert db.query(DeviceSession).count() == 0
+
+
+def test_phone_scan_rate_limit_is_per_user(client, monkeypatch):
+    from dataclasses import replace
+
+    from vision_vitals import api
+
+    monkeypatch.setattr(api, "settings", replace(api.settings, app_capture_rate_limit=1))
+    owner = register(client, "phone-limit@example.com")
+    other = register(client, "phone-limit-other@example.com")
+    content = io.BytesIO()
+    Image.new("RGB", (64, 64), (96, 120, 140)).save(content, format="JPEG")
+
+    def scan(user):
+        return client.post(
+            "/api/v1/analyses", headers=auth_headers(user), data={"source": "APP_CAMERA"},
+            files={"image": ("phone.jpg", content.getvalue(), "image/jpeg")},
+        )
+
+    assert scan(owner).status_code == 201
+    limited = scan(owner)
+    assert limited.status_code == 429
+    assert limited.json()["error"]["code"] == "RATE_LIMITED"
+    assert scan(other).status_code == 201
+
+
+def test_phone_scan_errors_keep_their_code_and_request_id(client, monkeypatch):
+    from dataclasses import replace
+
+    from vision_vitals import api
+
+    monkeypatch.setattr(api, "settings", replace(api.settings, max_upload_size_mb=1))
+    owner = register(client, "phone-errors@example.com")
+    headers = {**auth_headers(owner), "X-Request-ID": "phone-error-review"}
+    tiny = io.BytesIO()
+    Image.new("RGB", (1, 1)).save(tiny, format="JPEG")
+    for content, status, code in (
+        (tiny.getvalue(), 422, "IMAGE_RECAPTURE_REQUIRED"),
+        (b"not an image", 422, "UPLOAD_INVALID"),
+        (b"x" * (1024 * 1024 + 1), 413, "UPLOAD_TOO_LARGE"),
+    ):
+        response = client.post(
+            "/api/v1/analyses", headers=headers, data={"source": "APP_CAMERA"},
+            files={"image": ("phone.jpg", content, "image/jpeg")},
+        )
+        assert response.status_code == status, response.text
+        assert response.json()["error"]["code"] == code
+        assert response.json()["request_id"] == "phone-error-review"
