@@ -24,6 +24,7 @@ from .dependencies import (
 from .errors import AppError
 from .models import (
     Analysis,
+    AnalysisResult,
     AuditEvent,
     Device,
     DeviceCapture,
@@ -72,6 +73,7 @@ from .security import (
     verify_password,
     verify_device_secret,
 )
+from .optical import OpticalCapture, estimate
 from .pose import PoseCapture
 from .supplemental import MeasurementInputs
 from .quality import ImageQualityService
@@ -1032,6 +1034,31 @@ def get_analysis(analysis_id: str, auth: AuthContext = Depends(current_auth), db
     return envelope(_analysis_data(analysis), rid)
 
 
+@router.post("/analyses/{analysis_id}/camera-measurements", response_model=Envelope)
+def add_camera_measurement(
+    analysis_id: str, capture: OpticalCapture,
+    auth: AuthContext = Depends(current_auth), db: Session = Depends(get_db),
+    rid: str = Depends(request_id),
+):
+    analysis = db.scalar(select(Analysis).where(Analysis.id == analysis_id, Analysis.user_id == auth.user.id))
+    if not analysis:
+        raise AppError("RESOURCE_NOT_FOUND", "Analysis not found", 404)
+    auth_rate_limiter.check(f"optical:{auth.user.id}", limit=10)
+    metric = estimate(capture)
+    # Lock the result row for merging modalities; a failed remeasurement replaces
+    # that modality's old value, while preserving the other camera measurement.
+    saved = db.scalar(select(AnalysisResult).where(AnalysisResult.analysis_id == analysis_id).with_for_update())
+    if not saved:
+        raise AppError("RESULT_NOT_READY", "This report is not ready for camera measurements", 409)
+    saved.optical_metrics = {**(saved.optical_metrics or {}), capture.kind: metric.model_dump()}
+    analysis.updated_at = datetime.now(timezone.utc)
+    db.add(AuditEvent(user_id=auth.user.id, action="CAMERA_MEASUREMENT", resource_type="analysis", resource_id=analysis_id, request_id=rid,
+                      metadata_json={"kind": capture.kind, "status": metric.status}))
+    db.commit()
+    db.refresh(analysis)
+    return envelope(_analysis_data(analysis), rid)
+
+
 @router.get("/analyses/{analysis_id}/image")
 def get_analysis_image(
     analysis_id: str, auth: AuthContext = Depends(current_auth), db: Session = Depends(get_db)
@@ -1130,6 +1157,7 @@ def _analysis_data(analysis: Analysis) -> AnalysisData:
             visual_assessment=analysis.result.visual_assessment,
             camera_metrics=analysis.result.camera_metrics,
             supplemental_metrics=analysis.result.supplemental_metrics,
+            optical_metrics=analysis.result.optical_metrics,
             request_id=analysis.result.request_id,
         )
     return AnalysisData(

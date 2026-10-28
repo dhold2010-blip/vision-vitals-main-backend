@@ -124,6 +124,7 @@ class AnalysisResult(Base):
     limitations: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     visual_assessment: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     camera_metrics: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    optical_metrics: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     supplemental_metrics: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     request_id: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)

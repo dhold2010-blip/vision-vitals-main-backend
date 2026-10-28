@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .optical import OpticalMetrics
 from .pose import CameraMetrics
 from .supplemental import SupplementalMetrics
 
@@ -136,6 +137,7 @@ class AIAnalysisResponse(BaseModel):
 
 class AnalysisResultData(AIAnalysisResponse):
     # Kept separate so generative AI cannot supply camera measurements.
+    optical_metrics: OpticalMetrics | None = None
     camera_metrics: CameraMetrics | None = None
     supplemental_metrics: SupplementalMetrics | None = None
 
