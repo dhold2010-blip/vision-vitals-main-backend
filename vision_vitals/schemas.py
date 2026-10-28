@@ -39,7 +39,8 @@ class RegisterRequest(BaseModel):
 
 
 class LoginRequest(RegisterRequest):
-    pass
+    # Verify existing credentials; the new-password policy belongs to registration.
+    password: str = Field(min_length=1, max_length=128)
 
 
 class RefreshRequest(BaseModel):

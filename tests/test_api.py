@@ -273,3 +273,19 @@ def test_visual_assessment_survives_save_and_read(client, monkeypatch):
     saved = client.get(f"/api/v1/analyses/{analysis['id']}", headers=auth_headers(owner))
     assert saved.status_code == 200
     assert saved.json()["data"]["result"] == analysis["result"]
+
+
+def test_short_login_password_is_verified_not_blocked_by_signup_policy(client):
+    register(client, "existing-login@example.com")
+    response = client.post('/api/v1/auth/login', json={
+        'email': 'existing-login@example.com', 'password': 'incorrect',
+    })
+    assert response.status_code == 401
+    assert response.json()['error']['code'] == 'AUTH_INVALID_CREDENTIALS'
+
+
+def test_new_accounts_still_require_twelve_character_passwords(client):
+    response = client.post('/api/v1/auth/register', json={
+        'email': 'short-signup@example.com', 'password': 'short',
+    })
+    assert response.status_code == 422
