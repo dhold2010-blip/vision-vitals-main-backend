@@ -190,3 +190,32 @@ def test_saved_report_preserves_values_and_ownership(client):
         data={"measurement_inputs": json.dumps({"height_cm": -1})},
     )
     assert bad.status_code == 422
+
+
+def test_entered_readings_survive_description_failure_without_pose(client, monkeypatch):
+    from vision_vitals.ai import MockAIProvider
+    from vision_vitals.errors import AppError
+
+    def fail(*args):
+        raise AppError("AI_PROVIDER_ERROR", "offline", 503)
+
+    monkeypatch.setattr(MockAIProvider, "analyze", fail)
+    user = auth_headers(register(client, "entered-fallback@example.com"))
+    image = io.BytesIO()
+    Image.new("RGB", (600, 1000), "#8295aa").save(image, "JPEG")
+    response = client.post(
+        "/api/v1/analyses",
+        headers=user,
+        files={"image": ("photo.jpg", image.getvalue(), "image/jpeg")},
+        data={
+            "measurement_inputs": json.dumps({"age_years": 30, "height_cm": 170, "weight_kg": 65})
+        },
+    )
+    assert response.status_code == 201
+    result = response.json()["data"]["result"]
+    assert result["provider"] == "measurement_pipeline"
+    assert result["camera_metrics"]["status"] == "UNAVAILABLE"
+    assert (
+        next(m for m in result["supplemental_metrics"]["metrics"] if m["key"] == "bmi")["value"]
+        == 22.5
+    )

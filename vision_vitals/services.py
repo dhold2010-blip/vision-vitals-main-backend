@@ -62,7 +62,7 @@ class VisionAnalysisService:
                     raise
                 # Numeric geometry is independent of the optional generative description.
                 result = AIAnalysisResponse(
-                    provider="camera_geometry", model="mediapipe-pose-landmarker-lite-v1",
+                    provider="measurement_pipeline", model="deterministic-v1",
                     observation="Recorded measurements are available below. The photo description service is temporarily unavailable.",
                     result_status="ESTIMATION", confidence=None,
                     warnings=["PHOTO_DESCRIPTION_UNAVAILABLE"],

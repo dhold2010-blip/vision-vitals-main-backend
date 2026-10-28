@@ -154,6 +154,6 @@ def test_valid_geometry_survives_description_service_outage(client, monkeypatch)
     assert response.status_code == 201
     result = response.json()["data"]["result"]
     assert result["camera_metrics"]["status"] == "AVAILABLE"
-    assert result["provider"] == "camera_geometry"
+    assert result["provider"] == "measurement_pipeline"
     assert result["confidence"] is None
     assert result["warnings"] == ["PHOTO_DESCRIPTION_UNAVAILABLE"]
