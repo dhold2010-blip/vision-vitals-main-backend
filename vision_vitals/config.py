@@ -4,6 +4,12 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+# Load local .env values before reading settings. Existing process/deployment
+# environment variables take precedence because override defaults to False.
+load_dotenv()
+
 
 def _csv(name: str, default: str = "") -> tuple[str, ...]:
     return tuple(item.strip() for item in os.getenv(name, default).split(",") if item.strip())
