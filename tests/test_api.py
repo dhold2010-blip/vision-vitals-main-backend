@@ -289,3 +289,56 @@ def test_new_accounts_still_require_twelve_character_passwords(client):
         'email': 'short-signup@example.com', 'password': 'short',
     })
     assert response.status_code == 422
+
+
+def test_account_profile_and_saved_report_lifecycle(client):
+    owner = register(client, 'lifecycle@example.com')
+    other = register(client, 'isolated@example.com')
+    headers = auth_headers(owner)
+    updated = client.patch('/api/v1/users/me/profile', headers=headers, json={
+        'display_name': 'Actual Account Name', 'timezone': 'Asia/Kolkata',
+    })
+    assert updated.status_code == 200
+    assert client.get('/api/v1/users/me', headers=headers).json()['data']['profile']['display_name'] == 'Actual Account Name'
+    assert client.get('/api/v1/users/me', headers=auth_headers(other)).json()['data']['profile']['display_name'] is None
+    assert client.patch('/api/v1/users/me/profile', headers=headers, json={'display_name':'x'*121}).status_code == 422
+    image = io.BytesIO()
+    Image.new('RGB', (64,64), (100,130,160)).save(image, format='JPEG')
+    created = client.post('/api/v1/analyses', headers=headers, data={'source':'APP_CAMERA'}, files={'image':('camera.jpg',image.getvalue(),'image/jpeg')})
+    assert created.status_code == 201
+    report_id = created.json()['data']['id']
+    assert client.get('/api/v1/analyses', headers=headers).json()['data'][0]['id'] == report_id
+    assert client.get('/api/v1/analyses?offset=1', headers=headers).json()['data'] == []
+    assert client.get('/api/v1/analyses', headers=auth_headers(other)).json()['data'] == []
+    photo = client.get(f'/api/v1/analyses/{report_id}/image', headers=headers)
+    assert photo.status_code == 200
+    assert photo.headers['content-type'] == 'image/jpeg'
+    assert client.delete(f'/api/v1/analyses/{report_id}', headers=auth_headers(other)).status_code == 403
+    assert client.delete(f'/api/v1/analyses/{report_id}', headers=headers).status_code == 200
+    assert client.get(f'/api/v1/analyses/{report_id}', headers=headers).status_code == 404
+    assert client.get(f'/api/v1/analyses/{report_id}/image', headers=headers).status_code == 404
+    assert client.get('/api/v1/analyses', headers=headers).json()['data'] == []
+    assert client.post('/api/v1/auth/logout', headers=headers).status_code == 200
+    assert client.get('/api/v1/users/me', headers=headers).status_code == 401
+    assert client.post('/api/v1/auth/refresh', json={'refresh_token':owner['tokens']['refresh_token']}).status_code == 401
+
+
+def test_failed_provider_leaves_no_report_or_image(client, monkeypatch):
+    from vision_vitals.errors import AppError
+    from vision_vitals.models import Analysis
+
+    class UnavailableProvider:
+        def analyze(self, request, image):
+            raise AppError('AI_PROVIDER_ERROR', 'Provider unavailable', 503)
+
+    monkeypatch.setattr('vision_vitals.api.get_ai_provider', UnavailableProvider)
+    owner = register(client, 'provider-failure@example.com')
+    image = io.BytesIO()
+    Image.new('RGB', (64,64), (100,120,150)).save(image, format='PNG')
+    response = client.post('/api/v1/analyses', headers=auth_headers(owner), files={'image':('image.png',image.getvalue(),'image/png')})
+    assert response.status_code == 503
+    with SessionLocal() as db:
+        assert db.query(Analysis).count() == 0
+        assert db.query(AnalysisImage).count() == 0
+    from pathlib import Path
+    assert not list(Path('test_storage').glob('*'))
