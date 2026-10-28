@@ -11,6 +11,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def _database_url() -> str:
+    url = os.getenv("DATABASE_URL", "sqlite:///./vision_vitals.db")
+    # Render commonly supplies postgres:// or postgresql:// URLs. This project
+    # installs psycopg v3, so select that driver explicitly for SQLAlchemy.
+    if url.startswith("postgres://"):
+        return "postgresql+psycopg://" + url.removeprefix("postgres://")
+    if url.startswith("postgresql://"):
+        return "postgresql+psycopg://" + url.removeprefix("postgresql://")
+    return url
+
+
 def _csv(name: str, default: str = "") -> tuple[str, ...]:
     return tuple(item.strip() for item in os.getenv(name, default).split(",") if item.strip())
 
@@ -18,7 +29,7 @@ def _csv(name: str, default: str = "") -> tuple[str, ...]:
 @dataclass(frozen=True)
 class Settings:
     app_env: str = os.getenv("APP_ENV", "development")
-    database_url: str = os.getenv("DATABASE_URL", "sqlite:///./vision_vitals.db")
+    database_url: str = _database_url()
     jwt_secret: str = os.getenv("JWT_SECRET", "")
     jwt_refresh_secret: str = os.getenv("JWT_REFRESH_SECRET", "")
     access_token_expire_minutes: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "15"))
