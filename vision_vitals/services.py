@@ -5,6 +5,7 @@ from sqlalchemy.orm import Session
 from .ai import AIProvider
 from .errors import AIOutputInvalidError, AppError
 from .models import Analysis, AnalysisImage, AnalysisResult, AuditEvent
+from .pose import PoseCapture, camera_metrics
 from .quality import ImageQualityService
 from .schemas import AIAnalysisRequest, AIAnalysisResponse
 from .storage import StoredImage, StorageProvider
@@ -25,8 +26,10 @@ class VisionAnalysisService:
         filename: str,
         mime_type: str,
         image_source: str = "UPLOAD",
+        pose_capture: PoseCapture | None = None,
     ) -> Analysis:
-        self.quality.validate_or_raise(image)
+        quality = self.quality.validate_or_raise(image)
+        geometry = camera_metrics(pose_capture, quality.width, quality.height)
         analysis = Analysis(user_id=user_id, request_id=request_id, status="PROCESSING")
         self.db.add(analysis)
         self.db.flush()
@@ -45,11 +48,24 @@ class VisionAnalysisService:
             ai_request = AIAnalysisRequest(
                 request_id=request_id, mime_type=mime_type, image_sha256=stored.sha256
             )
-            if self.provider is None:
-                raise AppError("AI_PROVIDER_ERROR", "No AI provider is configured", 503)
-            result: AIAnalysisResponse = self.provider.analyze(ai_request, image)
-            if result.request_id != request_id:
-                raise AIOutputInvalidError("The AI response request_id did not match the request")
+            try:
+                if self.provider is None:
+                    raise AppError("AI_PROVIDER_ERROR", "No AI provider is configured", 503)
+                result: AIAnalysisResponse = self.provider.analyze(ai_request, image)
+                if result.request_id != request_id:
+                    raise AIOutputInvalidError("The AI response request_id did not match the request")
+            except AppError:
+                if geometry.status == "UNAVAILABLE":
+                    raise
+                # Numeric geometry is independent of the optional generative description.
+                result = AIAnalysisResponse(
+                    provider="camera_geometry", model="mediapipe-pose-landmarker-lite-v1",
+                    observation="Camera angle estimates are available below. The photo description service is temporarily unavailable.",
+                    result_status="ESTIMATION", confidence=None,
+                    warnings=["PHOTO_DESCRIPTION_UNAVAILABLE"],
+                    limitations=["No clinical measurements or diagnosis were produced."],
+                    request_id=request_id,
+                )
             analysis.result = AnalysisResult(
                 analysis_id=analysis.id,
                 provider=result.provider,
@@ -62,6 +78,7 @@ class VisionAnalysisService:
                 visual_assessment=(
                     result.visual_assessment.model_dump() if result.visual_assessment else None
                 ),
+                camera_metrics=geometry.model_dump(),
                 request_id=result.request_id,
             )
             analysis.status = "COMPLETED"

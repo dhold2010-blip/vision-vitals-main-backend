@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from .pose import CameraMetrics
+
 from datetime import datetime, timedelta, timezone
 import math
 from typing import Any, Literal
@@ -131,12 +133,17 @@ class AIAnalysisResponse(BaseModel):
         return self
 
 
+class AnalysisResultData(AIAnalysisResponse):
+    # Kept separate so generative AI cannot supply camera measurements.
+    camera_metrics: CameraMetrics | None = None
+
+
 class AnalysisData(BaseModel):
     id: str
     status: str
     created_at: datetime
     updated_at: datetime
-    result: AIAnalysisResponse | None = None
+    result: AnalysisResultData | None = None
 
 
 class HealthMetricCreate(BaseModel):

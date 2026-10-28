@@ -36,7 +36,7 @@ from .models import (
 )
 from .schemas import (
     AnalysisData,
-    AIAnalysisResponse,
+    AnalysisResultData,
     Envelope,
     HealthMetricCreate,
     HealthMetricData,
@@ -72,6 +72,7 @@ from .security import (
     verify_password,
     verify_device_secret,
 )
+from .pose import PoseCapture
 from .quality import ImageQualityService
 from .rate_limit import auth_rate_limiter, device_rate_limiter, password_rate_limiter
 from .services import VisionAnalysisService
@@ -955,6 +956,7 @@ async def create_analysis(
     request: Request,
     image: UploadFile = File(...),
     source: str = Form(default="UPLOAD"),
+    pose_capture: str | None = Form(default=None, max_length=16000),
     auth: AuthContext = Depends(current_auth),
     db: Session = Depends(get_db),
     rid: str = Depends(request_id),
@@ -968,6 +970,12 @@ async def create_analysis(
     content = await image.read(settings.max_upload_size_mb * 1024 * 1024 + 1)
     if len(content) > settings.max_upload_size_mb * 1024 * 1024:
         raise AppError("UPLOAD_TOO_LARGE", "The image exceeds the upload size limit", 413)
+    pose = None
+    if pose_capture is not None:
+        try:
+            pose = PoseCapture.model_validate_json(pose_capture)
+        except ValidationError as exc:
+            raise AppError("VALIDATION_ERROR", "Invalid camera landmarks", 422) from exc
     service = VisionAnalysisService(db, LocalStorageProvider(), get_ai_provider())
     analysis = await run_in_threadpool(
         service.create,
@@ -977,6 +985,7 @@ async def create_analysis(
         image.filename or "image",
         image.content_type or "",
         source,
+        pose,
     )
     return envelope(_analysis_data(analysis), rid)
 
@@ -1101,7 +1110,7 @@ def audit_events(auth: AuthContext = Depends(admin_auth), db: Session = Depends(
 def _analysis_data(analysis: Analysis) -> AnalysisData:
     result = None
     if analysis.result:
-        result = AIAnalysisResponse(
+        result = AnalysisResultData(
             provider=analysis.result.provider,
             model=analysis.result.model,
             observation=analysis.result.observation,
@@ -1110,6 +1119,7 @@ def _analysis_data(analysis: Analysis) -> AnalysisData:
             warnings=analysis.result.warnings,
             limitations=analysis.result.limitations,
             visual_assessment=analysis.result.visual_assessment,
+            camera_metrics=analysis.result.camera_metrics,
             request_id=analysis.result.request_id,
         )
     return AnalysisData(

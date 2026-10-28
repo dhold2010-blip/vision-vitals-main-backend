@@ -138,3 +138,31 @@ measurements are unsupported. No person produces `UNAVAILABLE` with recapture gu
 Gemini confidence is null because this pipeline does not compute a calibrated score;
 `UNAVAILABLE` never represents a zero health score. Migration `0004_visual_assessment`
 preserves existing reports and persists the new observations.
+
+### Camera angle estimates
+
+`POST /api/v1/analyses` accepts an optional multipart `pose_capture` JSON string
+(maximum 16,000 characters). Version 1 uses model
+`mediapipe-pose-landmarker-lite-float16-v1`, image `width`/`height`, and status
+`DETECTED`, `NO_POSE`, `MULTIPLE_POSES` or `MODEL_UNAVAILABLE`. A detected capture
+must contain exactly 33 `{x, y, visibility, presence?}` image-normalized landmarks;
+other statuses must have an empty landmark array. Clients cannot submit angles.
+
+The server derives seven angles in pixel coordinates (preserving image aspect
+ratio): shoulder-line tilt, hip-line tilt, torso lean, and left/right elbow and
+knee angles. Values are degrees rounded to one decimal, with `ESTIMATED` status.
+Required landmarks below 0.7 visibility/presence, near/outside image boundaries,
+collapsed segments, and dimension mismatches yield null with an explanatory
+`UNAVAILABLE` status. Valid zero angles remain zero. These conservative gates
+are engineering heuristics, not a validated accuracy guarantee.
+
+`result.camera_metrics` persists in list/detail responses, with method, source,
+limitations and individual reasons. Its JSON column is added by migration 0005;
+existing reports remain nullable. The data is separate from the Gemini schema:
+Gemini cannot author measurements. Valid camera geometry survives a description
+provider error, with a warning that the description is unavailable.
+
+These are browser-supplied landmark estimates, not independently attested
+server detections, calibrated 3D joint measurements, or medical readings.
+Perspective and camera tilt affect them. No height, weight, pulse, age, body
+composition or overall health/posture score is inferred from appearance.
