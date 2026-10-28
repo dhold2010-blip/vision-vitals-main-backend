@@ -122,6 +122,7 @@ class AnalysisResult(Base):
     confidence: Mapped[float | None] = mapped_column(nullable=True)
     warnings: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
     limitations: Mapped[list[str]] = mapped_column(JSON, default=list, nullable=False)
+    visual_assessment: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     request_id: Mapped[str] = mapped_column(String(64), nullable=False)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     analysis: Mapped[Analysis] = relationship(back_populates="result")

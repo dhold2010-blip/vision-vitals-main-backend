@@ -1109,6 +1109,7 @@ def _analysis_data(analysis: Analysis) -> AnalysisData:
             confidence=analysis.result.confidence,
             warnings=analysis.result.warnings,
             limitations=analysis.result.limitations,
+            visual_assessment=analysis.result.visual_assessment,
             request_id=analysis.result.request_id,
         )
     return AnalysisData(

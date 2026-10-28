@@ -59,6 +59,9 @@ class VisionAnalysisService:
                 confidence=result.confidence,
                 warnings=result.warnings,
                 limitations=result.limitations,
+                visual_assessment=(
+                    result.visual_assessment.model_dump() if result.visual_assessment else None
+                ),
                 request_id=result.request_id,
             )
             analysis.status = "COMPLETED"

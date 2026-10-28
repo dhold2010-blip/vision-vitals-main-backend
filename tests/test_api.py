@@ -242,3 +242,34 @@ def test_phone_scan_errors_keep_their_code_and_request_id(client, monkeypatch):
         assert response.status_code == status, response.text
         assert response.json()["error"]["code"] == code
         assert response.json()["request_id"] == "phone-error-review"
+
+
+def test_visual_assessment_survives_save_and_read(client, monkeypatch):
+    from vision_vitals.schemas import AIAnalysisResponse, VisualAssessment
+
+    visual = VisualAssessment(
+        subject_visible=True, framing="Head and shoulders visible.", lighting="Light from the left.",
+        posture="The head is tilted to one side.", capture_tips=["Include your full body."],
+    )
+
+    class PhotoProvider:
+        def analyze(self, request, image):
+            return AIAnalysisResponse(
+                provider="test", model="visual-report", observation="A seated person is visible.",
+                result_status="OBSERVATION", request_id=request.request_id, visual_assessment=visual,
+            )
+
+    monkeypatch.setattr("vision_vitals.api.get_ai_provider", PhotoProvider)
+    owner = register(client, "visual-report@example.com")
+    content = io.BytesIO()
+    Image.new("RGB", (64, 64), (100, 120, 150)).save(content, format="JPEG")
+    response = client.post(
+        "/api/v1/analyses", headers=auth_headers(owner), data={"source": "APP_CAMERA"},
+        files={"image": ("photo.jpg", content.getvalue(), "image/jpeg")},
+    )
+    assert response.status_code == 201, response.text
+    analysis = response.json()["data"]
+    assert analysis["result"]["visual_assessment"] == visual.model_dump()
+    saved = client.get(f"/api/v1/analyses/{analysis['id']}", headers=auth_headers(owner))
+    assert saved.status_code == 200
+    assert saved.json()["data"]["result"] == analysis["result"]

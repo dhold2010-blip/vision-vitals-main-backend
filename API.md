@@ -127,3 +127,14 @@ through `DEVICE_MIN_SHARPNESS`.
 * `GET /api/v1/health` reports the database-backed service status.
 * `GET /openapi.json` and `/docs` expose the generated contract. Security
   schemes describe the user bearer token and device session header.
+
+### Photo report observations
+
+New Gemini reports include `result.visual_assessment`: `subject_visible` (boolean),
+`framing`, `lighting`, `posture` (plain-language strings), and `capture_tips` (string array).
+The field is nullable for older reports and mock mode. Observations describe the uploaded
+photo, not measured health. A visible person can produce `OBSERVATION` even when clinical
+measurements are unsupported. No person produces `UNAVAILABLE` with recapture guidance.
+Gemini confidence is null because this pipeline does not compute a calibrated score;
+`UNAVAILABLE` never represents a zero health score. Migration `0004_visual_assessment`
+preserves existing reports and persists the new observations.

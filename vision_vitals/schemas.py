@@ -101,6 +101,15 @@ class AIAnalysisRequest(BaseModel):
     image_sha256: str
 
 
+class VisualAssessment(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    subject_visible: bool = Field(strict=True)
+    framing: str = Field(min_length=1, max_length=1000)
+    lighting: str = Field(min_length=1, max_length=1000)
+    posture: str = Field(min_length=1, max_length=1000)
+    capture_tips: list[str] = Field(default_factory=list, max_length=6)
+
+
 class AIAnalysisResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     provider: str = Field(min_length=1, max_length=64)
@@ -111,6 +120,14 @@ class AIAnalysisResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list, max_length=20)
     limitations: list[str] = Field(default_factory=list, max_length=20)
     request_id: str = Field(min_length=1, max_length=64)
+    # Optional for reports saved before visual assessments were introduced.
+    visual_assessment: VisualAssessment | None = None
+
+    @model_validator(mode="after")
+    def unavailable_has_no_confidence(self):
+        if self.result_status == "UNAVAILABLE":
+            self.confidence = None
+        return self
 
 
 class AnalysisData(BaseModel):
