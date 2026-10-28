@@ -91,7 +91,8 @@ class GeminiProvider(AIProvider):
             raise AppError("AI_PROVIDER_ERROR", "The AI provider could not process the image", 502) from exc
         if result.request_id != request.request_id:
             raise AIOutputInvalidError("The AI response request_id did not match the request")
-        return result
+        # Provider identity is deployment metadata, not something the model can infer.
+        return result.model_copy(update={"provider": self.name, "model": self.model})
 
 
 def get_ai_provider() -> AIProvider:

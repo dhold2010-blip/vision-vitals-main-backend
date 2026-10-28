@@ -21,6 +21,24 @@ Important settings include:
 Do not put secrets in the image, repository, OpenAPI examples, device
 configuration committed to source control, or logs.
 
+### Gemini on Render
+
+Set `AI_PROVIDER=gemini`, `GEMINI_API_KEY`, and
+`GEMINI_MODEL=gemini-3.5-flash-lite` on the backend service. Variable names are
+case-sensitive: `GEMINI_API` is not read, and `APP_ENV` must be uppercase.
+Keep the API key on the backend; the Vercel frontend only needs
+`VISION_VITALS_BACKEND_URL` pointing to the Render service origin.
+
+Save and deploy after changing Render environment variables. A 503 before a
+Gemini request can indicate a missing key; a Google 404 for a model means that
+the configured model is unavailable to that project. Gemini 2.5 access is now
+limited for new projects; use a supported model with image input and structured
+output support. See Google's [model catalog](https://ai.google.dev/gemini-api/docs/models).
+
+Verify an authenticated `POST /api/v1/analyses` with `source=APP_CAMERA`, not only
+the readiness endpoint. Provider and model names in results come from the
+backend's configured provider rather than the model's generated JSON.
+
 ## Docker Compose
 
 Create a private `.env` file from `.env.example`, replace every placeholder,

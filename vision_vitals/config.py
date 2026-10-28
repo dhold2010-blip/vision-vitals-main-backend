@@ -19,7 +19,7 @@ class Settings:
     refresh_token_expire_days: int = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "30"))
     ai_provider: str = os.getenv("AI_PROVIDER", "mock").lower()
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
-    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+    gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
     max_upload_size_mb: int = int(os.getenv("MAX_UPLOAD_SIZE_MB", "10"))
     device_auth_enabled: bool = os.getenv("DEVICE_AUTH_ENABLED", "true").lower() in {"1", "true", "yes"}
     device_session_expire_minutes: int = int(os.getenv("DEVICE_SESSION_EXPIRE_MINUTES", "60"))

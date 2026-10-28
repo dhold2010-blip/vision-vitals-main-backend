@@ -10,6 +10,7 @@ services:
       JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET must be set}
       AI_PROVIDER: ${AI_PROVIDER:-mock}
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
       STORAGE_PATH: /app/storage
       TRUSTED_HOSTS: localhost,127.0.0.1,api
     volumes:
