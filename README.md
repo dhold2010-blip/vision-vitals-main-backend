@@ -15,6 +15,11 @@ alembic upgrade head
 uvicorn vision_vitals.main:app --reload
 ```
 
+The backend explicitly loads the local `.env` file before constructing its
+settings, so Alembic and the API use the same `DATABASE_URL`. Variables already
+provided by the process or deployment platform take precedence over `.env`.
+Do not commit your real `.env` file or share its secrets.
+
 The default `AI_PROVIDER=mock` mode runs without Gemini credentials, cloud
 storage, Redis, or a queue. The API is available under `/api/v1`; interactive
 OpenAPI documentation is at `/docs`.
@@ -28,8 +33,9 @@ docker compose up --build
 
 PostgreSQL is the Docker database. SQLite is supported for development and
 tests. The application does not create or mutate database tables at startup;
-run `alembic upgrade head` before starting it. Secrets must be supplied through
-environment configuration; no real secret is committed here.
+run `alembic upgrade head` before starting it. The account table is named
+`users` (plural) in the backend schema and migrations. Secrets must be supplied
+through environment configuration; no real secret is committed here.
 
 ## Device and camera integration
 
